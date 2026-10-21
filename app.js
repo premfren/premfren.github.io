@@ -35,7 +35,7 @@ const SEED_TRIP = {
   name: 'กวางโจว ชิงเต่า ต้าเหลียน',
   start: '2026-10-23',
   end: '2026-11-01',
-  travelers: 'ฉัน & แฟน',
+  travelers: 'Prem & Fren',
   color: '#C8372D',
   cities: [
     { code: 'CAN', name: 'กวางโจว' },
@@ -55,8 +55,8 @@ const SEED_TRIP = {
   ],
   activities: [],
   people: [
-    { id: 'p1', name: 'ฉัน', passportName: '', passportNo: '', passportExp: '', qr: '' },
-    { id: 'p2', name: 'แฟน', passportName: '', passportNo: '', passportExp: '', qr: '' },
+    { id: 'p1', name: 'Prem', passportName: '', passportNo: '', passportExp: '', qr: '' },
+    { id: 'p2', name: 'Fren', passportName: '', passportNo: '', passportExp: '', qr: '' },
   ],
   notes: [
     { id: 'n1', label: 'ประกันการเดินทาง', value: '' },
@@ -77,10 +77,137 @@ async function load() {
     data = { version: 1, trips: [structuredClone(SEED_TRIP)] };
     toast('บันทึกข้อมูลในเครื่องไม่ได้ (โหมดส่วนตัว?)');
   }
+  if (migrate()) await save();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 }
-async function save() {
+
+/* v2: travelers got real names (devices that opened v1 still hold the old placeholders) */
+function migrate() {
+  if (data.version >= 2) return false;
+  const names = { 'ฉัน': 'Prem', 'แฟน': 'Fren' };
+  for (const t of data.trips) {
+    if (t.travelers === 'ฉัน & แฟน') t.travelers = 'Prem & Fren';
+    for (const p of t.people || []) if (names[p.name]) p.name = names[p.name];
+  }
+  data.version = 2;
+  return true;
+}
+
+/* pass the trip that changed: it is stamped for sync and pushed shortly after */
+async function save(t) {
+  if (t) t.updatedAt = Date.now();
   try { await DB.set('data', data); } catch (e) { toast('บันทึกไม่สำเร็จ'); }
+  if (t) scheduleSync(t.id);
+}
+
+/* ---------- sync (Supabase, optional; the app works fully without it) ---------- */
+
+const CFG = window.TRIP_CONFIG || {};
+const syncReady = () => !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
+const syncState = {};
+// QR images and passport details never leave the device
+const LOCAL_ONLY = ['qr', 'passportName', 'passportNo', 'passportExp'];
+
+async function rpc(fn, body) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const r = await fetch(`${CFG.supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${CFG.supabaseAnonKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return r.json();
+  } finally { clearTimeout(timer); }
+}
+
+function toRemote(t) {
+  const c = structuredClone(t);
+  delete c.syncKey;
+  c.people = (c.people || []).map((p) => { const q = { ...p }; LOCAL_ONLY.forEach((k) => delete q[k]); return q; });
+  return c;
+}
+function fromRemote(remote, local, key) {
+  const t = structuredClone(remote);
+  t.syncKey = key;
+  t.people = (t.people || []).map((p) => {
+    const lp = (local?.people || []).find((x) => x.id === p.id) || {};
+    const q = { ...p };
+    LOCAL_ONLY.forEach((k) => { q[k] = lp[k] || ''; });
+    return q;
+  });
+  return t;
+}
+function putTrip(t) {
+  const i = data.trips.findIndex((x) => x.id === t.id);
+  if (i >= 0) data.trips[i] = t; else data.trips.push(t);
+}
+
+/* last write wins per trip: whichever side has the newer updatedAt */
+async function syncTrip(id) {
+  const t = trip(id);
+  if (!syncReady() || !t || !t.syncKey) return false;
+  let changed = false;
+  try {
+    const res = await rpc('trip_get', { p_id: t.id, p_secret: t.syncKey });
+    const local = t.updatedAt || 0;
+    if (res && res.updated_at > local) {
+      putTrip(fromRemote(res.data, t, t.syncKey)); changed = true;
+    } else if (!res || res.updated_at < local) {
+      if (!t.updatedAt) t.updatedAt = Date.now();
+      const put = await rpc('trip_put', { p_id: t.id, p_secret: t.syncKey, p_data: toRemote(t), p_updated_at: t.updatedAt });
+      if (put && put.ok === false) { putTrip(fromRemote(put.data, t, t.syncKey)); changed = true; }
+    }
+    syncState[id] = { ok: true, at: Date.now() };
+  } catch (e) {
+    syncState[id] = { ok: false, at: Date.now(), offline: !navigator.onLine };
+  }
+  return changed;
+}
+
+let syncing = false;
+async function syncAll() {
+  if (!syncReady() || syncing) return;
+  syncing = true;
+  let changed = false;
+  for (const t of data.trips.filter((x) => x.syncKey)) changed = (await syncTrip(t.id)) || changed;
+  syncing = false;
+  if (changed) { try { await DB.set('data', data); } catch (e) {} }
+  if (!document.querySelector('dialog[open]')) render();
+}
+const syncTimers = {};
+function scheduleSync(id) {
+  if (!syncReady()) return;
+  clearTimeout(syncTimers[id]);
+  syncTimers[id] = setTimeout(syncAll, 800);
+}
+function syncLabel(t) {
+  if (!t.syncKey) return '';
+  if (!syncReady()) return 'ยังไม่ได้ตั้งค่าซิงก์';
+  const s = syncState[t.id];
+  if (!s) return 'กำลังซิงก์…';
+  const hm = new Date(s.at).toTimeString().slice(0, 5);
+  return s.ok ? `ซิงก์แล้ว ${hm}` : s.offline ? 'ออฟไลน์ · จะซิงก์เมื่อมีเน็ต' : 'ซิงก์ไม่สำเร็จ · จะลองใหม่';
+}
+function newKey() {
+  const b = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function inviteLink(t) { return `${location.origin}${location.pathname}#/join/${encodeURIComponent(t.id)}/${t.syncKey}`; }
+
+async function joinTrip(id, key) {
+  if (!syncReady()) { toast('ยังไม่ได้ตั้งค่าซิงก์'); return false; }
+  try {
+    const res = await rpc('trip_get', { p_id: id, p_secret: key });
+    if (!res) { toast('ไม่พบทริป หรือรหัสไม่ถูกต้อง'); return false; }
+    putTrip(fromRemote(res.data, trip(id), key));
+    syncState[id] = { ok: true, at: Date.now() };
+    await save();
+    toast('เชื่อมทริปแล้ว');
+    return true;
+  } catch (e) { toast('เชื่อมไม่สำเร็จ ลองใหม่เมื่อมีเน็ต'); return false; }
 }
 
 /* ---------- helpers ---------- */
@@ -154,6 +281,7 @@ const ic = {
   pin: svg('<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>'),
   copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
   more: svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', 2.5),
+  sync: svg('<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>'),
   car: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/>', 1.8),
 };
 
@@ -166,7 +294,7 @@ function viewHome() {
   const main = upcoming[0];
   return `<main class="screen">
     <header class="bar">
-      <div class="grow stack-s"><span class="eyebrow">ฉัน &amp; แฟน</span><h1 class="title-xl">ทริปของเรา</h1></div>
+      <div class="grow stack-s"><span class="eyebrow">Prem &amp; Fren</span><h1 class="title-xl">ทริปของเรา</h1></div>
       <button class="icon-btn" data-act="backupMenu" aria-label="สำรอง / นำเข้าข้อมูล">${ic.more}</button>
       <button class="icon-btn dark" data-act="newTrip" aria-label="เพิ่มทริปใหม่">${ic.plus}</button>
     </header>
@@ -210,9 +338,12 @@ function tripHead(t) {
   return `<header class="trip-head">
     <div class="row between">
       <a class="icon-btn glass" href="#/" aria-label="กลับหน้าแรก">${ic.back}</a>
-      <button class="icon-btn glass" data-act="editTrip" data-id="${t.id}" aria-label="แก้ไขทริป">${ic.edit}</button>
+      <span class="row" style="gap:8px">
+        <button class="icon-btn glass" data-act="syncMenu" data-id="${t.id}" aria-label="ซิงก์กับอีกเครื่อง">${ic.sync}</button>
+        <button class="icon-btn glass" data-act="editTrip" data-id="${t.id}" aria-label="แก้ไขทริป">${ic.edit}</button>
+      </span>
     </div>
-    <div class="stack-s"><h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span></div>
+    <div class="stack-s"><h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span>${t.syncKey ? `<span class="tiny">${syncLabel(t)}</span>` : ''}</div>
     ${(t.cities || []).length ? `<div class="grid-3">${t.cities.map((c) => {
       const n = t.hotels.filter((x) => x.city === c.name).reduce((s, x) => s + nights(x), 0);
       return `<div class="city-tile"><span class="code">${h(c.code || '—')}</span><span class="small">${h(c.name)}</span><span class="tiny">${n} คืน</span></div>`;
@@ -512,7 +643,7 @@ const TRIP_FIELDS = [
   { k: 'start', l: 'วันไป', t: 'date', half: true, req: true },
   { k: 'end', l: 'วันกลับ', t: 'date', half: true, req: true },
   { k: 'citiesText', l: 'เมือง (เรียงตามลำดับ คั่นด้วย ,  ใส่รหัสสนามบินในวงเล็บได้)', ph: 'โตเกียว (NRT), โอซาก้า (KIX)' },
-  { k: 'travelers', l: 'ผู้ร่วมเดินทาง', ph: 'ฉัน & แฟน' },
+  { k: 'travelers', l: 'ผู้ร่วมเดินทาง', ph: 'Prem & Fren' },
   { k: 'color', l: 'สีประจำทริป', t: 'color' },
 ];
 const FLIGHT_FIELDS = [
@@ -579,9 +710,9 @@ function editItem(t, list, fields, item, title) {
     title, fields, values: item || {},
     onSave: async (v) => {
       if (item) Object.assign(item, v); else t[list].push({ id: uid(), ...v });
-      await save(); render();
+      await save(t); render();
     },
-    onDelete: item ? async () => { t[list] = t[list].filter((x) => x !== item); await save(); render(); } : null,
+    onDelete: item ? async () => { t[list] = t[list].filter((x) => x !== item); await save(t); render(); } : null,
   });
 }
 
@@ -590,13 +721,13 @@ function editItem(t, list, fields, item, title) {
 const actions = {
   newTrip() {
     openSheet({
-      title: 'ทริปใหม่', fields: TRIP_FIELDS, values: { travelers: 'ฉัน & แฟน', color: COLORS[1][0] }, submit: 'สร้างทริป',
+      title: 'ทริปใหม่', fields: TRIP_FIELDS, values: { travelers: 'Prem & Fren', color: COLORS[1][0] }, submit: 'สร้างทริป',
       onSave: async (v) => {
         if (v.end < v.start) [v.start, v.end] = [v.end, v.start];
         const t = { id: uid(), name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, cities: parseCities(v.citiesText),
           flights: [], hotels: [], activities: [], notes: [], dayTitles: {},
-          people: [{ id: uid(), name: 'ฉัน', passportName: '', passportNo: '', passportExp: '', qr: '' }, { id: uid(), name: 'แฟน', passportName: '', passportNo: '', passportExp: '', qr: '' }] };
-        data.trips.push(t); await save(); location.hash = `#/t/${t.id}`;
+          people: [{ id: uid(), name: 'Prem', passportName: '', passportNo: '', passportExp: '', qr: '' }, { id: uid(), name: 'Fren', passportName: '', passportNo: '', passportExp: '', qr: '' }] };
+        data.trips.push(t); await save(t); location.hash = `#/t/${t.id}`;
       },
     });
   },
@@ -607,7 +738,7 @@ const actions = {
       onSave: async (v) => {
         if (v.end < v.start) [v.start, v.end] = [v.end, v.start];
         Object.assign(t, { name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, cities: parseCities(v.citiesText) });
-        await save(); render();
+        await save(t); render();
       },
       onDelete: async () => { data.trips = data.trips.filter((x) => x !== t); await save(); location.hash = '#/'; },
     });
@@ -616,7 +747,7 @@ const actions = {
     const t = trip(id);
     openSheet({
       title: `ชื่อของวัน ${fmtD(date)}`, fields: [{ k: 'title', l: 'ชื่อวัน (เว้นว่างเพื่อใช้ชื่ออัตโนมัติ)', ph: 'เช่น เดินเล่นชายหาด' }], values: { title: t.dayTitles[date] || '' },
-      onSave: async (v) => { if (v.title) t.dayTitles[date] = v.title; else delete t.dayTitles[date]; await save(); render(); },
+      onSave: async (v) => { if (v.title) t.dayTitles[date] = v.title; else delete t.dayTitles[date]; await save(t); render(); },
     });
   },
   addAct({ id, date }) { const t = trip(id); editItem(t, 'activities', actFields(t), null, 'เพิ่มกิจกรรม'); setTimeout(() => { const s = document.querySelector('dialog [name="date"]'); if (s) s.value = date; }); },
@@ -634,13 +765,51 @@ const actions = {
   async copy({ text }) {
     try { await navigator.clipboard.writeText(text); toast('คัดลอกแล้ว'); } catch (e) { toast(text); }
   },
+  syncMenu({ id }) {
+    const t = trip(id);
+    if (!syncReady()) { toast('ยังไม่ได้ตั้งค่า Supabase (config.js)'); return; }
+    if (!t.syncKey) {
+      openMenu('ซิงก์ทริปนี้', [
+        { label: 'เปิดซิงก์ แล้วส่งลิงก์ให้อีกคน', hint: 'เครื่องนี้จะเป็นต้นฉบับ แล้วส่งลิงก์ให้อีกเครื่องกดเข้าร่วม', run: async () => {
+          t.syncKey = newKey(); await save(t); await syncAll(); shareInvite(t);
+        } },
+        { label: 'เข้าร่วมด้วยลิงก์ที่ได้รับ', hint: 'ข้อมูลทริปในเครื่องนี้จะถูกแทนด้วยของอีกเครื่อง (QR และพาสปอร์ตยังอยู่)', run: () => actions.joinPrompt() },
+      ]);
+      return;
+    }
+    openMenu(`ซิงก์ · ${syncLabel(t)}`, [
+      { label: 'ซิงก์ตอนนี้', run: () => syncAll() },
+      { label: 'ส่งลิงก์ให้อีกคนอีกครั้ง', run: () => shareInvite(t) },
+      { label: 'หยุดซิงก์ในเครื่องนี้', hint: 'ข้อมูลยังอยู่ในเครื่อง แต่จะไม่รับ/ส่งการแก้ไขอีก', run: async () => { delete t.syncKey; await save(); render(); } },
+    ]);
+  },
+  joinPrompt() {
+    openSheet({
+      title: 'เข้าร่วมทริป', submit: 'เข้าร่วม',
+      fields: [{ k: 'link', l: 'วางลิงก์ที่ได้รับ', t: 'textarea', req: true, ph: 'https://premfren.github.io/#/join/…' }],
+      onSave: async (v) => {
+        const m = v.link.match(/#\/join\/([^/\s]+)\/([A-Za-z0-9_-]{16,})/);
+        if (!m) { toast('ลิงก์ไม่ถูกต้อง'); return; }
+        const id = decodeURIComponent(m[1]);
+        if (await joinTrip(id, m[2])) location.hash = `#/t/${id}`;
+      },
+    });
+  },
   backupMenu() {
     openMenu('สำรอง / ย้ายข้อมูล', [
-      { label: 'ส่งออกไฟล์สำรอง (.json)', hint: 'เก็บไว้ หรือส่งให้แฟนนำเข้าในเครื่องของเขา', run: exportData },
+      { label: 'เข้าร่วมทริปด้วยลิงก์', hint: 'วางลิงก์ซิงก์ที่อีกคนส่งมา', run: () => actions.joinPrompt() },
+      { label: 'ส่งออกไฟล์สำรอง (.json)', hint: 'เก็บไว้ หรือย้ายไปเครื่องอื่น', run: exportData },
       { label: 'นำเข้าไฟล์สำรอง', hint: 'ทริปที่มีอยู่แล้วจะถูกแทนที่ด้วยข้อมูลในไฟล์', run: importData },
     ]);
   },
 };
+
+async function shareInvite(t) {
+  const url = inviteLink(t);
+  const text = `ลิงก์เข้าร่วมทริป "${t.name}" — เปิดแอปทริปของเรา แล้วกดปุ่มซิงก์ › เข้าร่วมด้วยลิงก์ แล้ววางลิงก์นี้\n${url}`;
+  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(url); toast('คัดลอกลิงก์แล้ว ส่งให้อีกคนได้เลย'); } catch (e) { prompt('คัดลอกลิงก์นี้', url); }
+}
 
 async function exportData() {
   const name = `trip-backup-${todayISO()}.json`;
@@ -694,6 +863,12 @@ let wakeLock = null;
 function render() {
   const hash = location.hash || '#/';
   const parts = hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+  if (parts[0] === 'join' && parts[2]) {
+    $app.innerHTML = '<p class="screen muted">กำลังเชื่อมทริป…</p>';
+    const id = parts[1];
+    joinTrip(id, parts[2]).then((ok) => location.replace(ok ? `#/t/${encodeURIComponent(id)}` : '#/'));
+    return;
+  }
   const t = parts[0] === 't' ? trip(parts[1]) : null;
   let html;
   if (!t) { html = viewHome(); document.documentElement.style.setProperty('--accent', '#C8372D'); }
@@ -730,5 +905,9 @@ window.addEventListener('hashchange', render);
 (async () => {
   await load();
   render();
+  syncAll();
+  setInterval(() => { if (document.visibilityState === 'visible') syncAll(); }, 30000);
+  window.addEventListener('online', syncAll);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncAll(); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
