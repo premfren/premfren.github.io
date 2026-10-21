@@ -1,6 +1,6 @@
 // Offline-first: the app shell is cached on install, so the app opens in China
 // even when GitHub Pages or Google Fonts can't be reached.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = ['./', 'index.html', 'style.css', 'config.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

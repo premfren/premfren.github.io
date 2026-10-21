@@ -97,16 +97,46 @@ function migrate() {
 async function save(t) {
   if (t) { t.updatedAt = Date.now(); t.edits = (t.edits || 0) + 1; }
   try { await DB.set('data', data); } catch (e) { toast('บันทึกไม่สำเร็จ'); }
-  if (t) scheduleSync(t.id);
+  scheduleSync();
 }
 
 /* ---------- sync (Supabase, optional; the app works fully without it) ---------- */
 
 const CFG = window.TRIP_CONFIG || {};
-const syncReady = () => !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
+const syncReady = () => !!(CFG.supabaseUrl && CFG.supabaseAnonKey && SECRET);
 const syncState = {};
 // QR images and passport details never leave the device
 const LOCAL_ONLY = ['qr', 'passportName', 'passportNo', 'passportExp'];
+
+/* ---------- password: one shared password unlocks the app and keys the sync ---------- */
+
+const KEY_STORE = 'trip-secret';
+let SECRET = '';
+const needsPassword = () => !!CFG.passwordCheck && !SECRET;
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/* first half checks the password offline, second half is the sync secret (never stored in the repo) */
+async function derive(pw) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: new TextEncoder().encode(CFG.passwordSalt), iterations: 300000, hash: 'SHA-256' }, key, 512);
+  return { check: b64url(bits.slice(0, 32)), secret: b64url(bits.slice(32)) };
+}
+function readStoredSecret() {
+  try { SECRET = localStorage.getItem(KEY_STORE) || sessionStorage.getItem(KEY_STORE) || ''; } catch (e) {}
+}
+async function unlock(pw, remember) {
+  const d = await derive(pw);
+  if (d.check !== CFG.passwordCheck) return false;
+  SECRET = d.secret;
+  try { (remember ? localStorage : sessionStorage).setItem(KEY_STORE, SECRET); } catch (e) {}
+  return true;
+}
+function lockApp() {
+  try { localStorage.removeItem(KEY_STORE); sessionStorage.removeItem(KEY_STORE); } catch (e) {}
+  SECRET = '';
+  location.hash = '#/';
+  render();
+}
 
 async function rpc(fn, body) {
   const ctrl = new AbortController();
@@ -134,9 +164,8 @@ function toRemote(t) {
   c.people = (c.people || []).map((p) => { const q = { ...p }; LOCAL_ONLY.forEach((k) => delete q[k]); return q; });
   return c;
 }
-function fromRemote(remote, local, key) {
+function fromRemote(remote, local) {
   const t = structuredClone(remote);
-  t.syncKey = key;
   t.people = (t.people || []).map((p) => {
     const lp = (local?.people || []).find((x) => x.id === p.id) || {};
     const q = { ...p };
@@ -151,7 +180,7 @@ function putTrip(t) {
 }
 /* take the server copy as is; it also becomes the base for the next merge */
 function adopt(t, remote, at) {
-  const n = fromRemote(remote, t, t.syncKey);
+  const n = fromRemote(remote, t);
   n.syncBase = structuredClone(remote); n.syncedAt = at; n.updatedAt = at;
   putTrip(n);
 }
@@ -196,38 +225,63 @@ function mergeList(b, l, r) {
 
 async function syncTrip(id) {
   let t = trip(id);
-  if (!syncReady() || !t || !t.syncKey) return false;
+  if (!syncReady() || !t) return false;
   let changed = false;
   try {
-    const res = await rpc('trip_get', { p_id: t.id, p_secret: t.syncKey });
+    const res = await rpc('trip_get', { p_id: id, p_secret: SECRET });
     t = trip(id);
-    if (!t || !t.syncKey) return false;
+    if (!t) return false;
     // edits counts local saves not yet on the server (clock-free, phones' clocks may differ)
-    const dirty = t.syncBase ? (t.edits || 0) > 0 : !t.syncedAt || (t.updatedAt || 0) > t.syncedAt;
+    const dirty = !t.syncBase || (t.edits || 0) > 0;
+    // both phones start from the built-in trip, so it is the base before the first sync
+    const base = t.syncBase || (id === SEED_TRIP.id ? toRemote(SEED_TRIP) : undefined);
     let out = null;
     if (res && res.updated_at !== t.syncedAt) {
       // the other phone saved since our last sync
       if (!dirty) { adopt(t, res.data, res.updated_at); changed = true; }
-      else if (t.syncBase) out = merge3(t.syncBase, toRemote(t), res.data);
-      else if ((t.updatedAt || 0) > res.updated_at) out = toRemote(t);  // trips synced before merging existed
-      else { adopt(t, res.data, res.updated_at); changed = true; }
+      else out = merge3(base, toRemote(t), res.data);
     } else if (dirty) out = toRemote(t);
     if (out) {
       const before = t.edits;
       const stamp = Math.max(Date.now(), (res?.updated_at || 0) + 1);
       out.updatedAt = stamp;
-      const put = await rpc('trip_put', { p_id: t.id, p_secret: t.syncKey, p_data: out, p_updated_at: stamp });
+      const put = await rpc('trip_put', { p_id: id, p_secret: SECRET, p_data: out, p_updated_at: stamp });
       t = trip(id);
-      if (put && put.ok === false) scheduleSync(id);       // lost a race: merge again with the newer copy
-      else if (!t || !t.syncKey) { /* stopped syncing meanwhile */ }
-      else if (t.edits !== before) scheduleSync(id);   // edited during upload: next round merges it in
+      if (put && put.ok === false) scheduleSync();         // lost a race: merge again with the newer copy
+      else if (!t) { /* deleted meanwhile */ }
+      else if (t.edits !== before) scheduleSync();         // edited during upload: next round merges it in
       else { adopt(t, out, stamp); changed = true; }
     }
-    syncState[id] = { ok: true, at: Date.now() };
+    syncState.ok = true;
   } catch (e) {
-    syncState[id] = { ok: false, at: Date.now(), offline: !navigator.onLine };
+    syncState.ok = false;
+    throw e;
   }
   return changed;
+}
+
+/* which trips exist is itself a synced list, so a trip added or deleted on one phone follows on the other */
+const INDEX_ID = '_trips';
+async function syncIndex() {
+  const res = await rpc('trip_get', { p_id: INDEX_ID, p_secret: SECRET });
+  const local = { trips: data.trips.map((t) => ({ id: t.id })) };
+  const merged = res ? merge3(data.indexBase, local, res.data) : local;
+  let changed = false;
+  for (const { id } of merged.trips) {
+    if (trip(id)) continue;
+    const r = await rpc('trip_get', { p_id: id, p_secret: SECRET });
+    if (!r) return false;  // not uploaded yet: leave the list alone this round
+    adopt({ id }, r.data, r.updated_at); changed = true;
+  }
+  const keep = new Set(merged.trips.map((x) => x.id));
+  if (data.trips.some((t) => !keep.has(t.id))) { data.trips = data.trips.filter((t) => keep.has(t.id)); changed = true; }
+  if (!res || !same(merged, res.data)) {
+    const put = await rpc('trip_put', { p_id: INDEX_ID, p_secret: SECRET, p_data: merged, p_updated_at: Math.max(Date.now(), (res?.updated_at || 0) + 1) });
+    if (put && put.ok === false) { scheduleSync(); return changed; }
+  }
+  const baseMoved = !same(data.indexBase, merged);
+  data.indexBase = merged;
+  return changed || baseMoved;
 }
 
 let syncing = false;
@@ -235,44 +289,29 @@ async function syncAll() {
   if (!syncReady() || syncing) return;
   syncing = true;
   let changed = false;
-  for (const t of data.trips.filter((x) => x.syncKey)) changed = (await syncTrip(t.id)) || changed;
+  try {
+    // trips first, so a new trip is on the server before the list points to it
+    for (const t of [...data.trips]) changed = (await syncTrip(t.id)) || changed;
+    changed = (await syncIndex()) || changed;
+  } catch (e) {
+    syncState.ok = false;
+  }
+  syncState.at = Date.now(); syncState.offline = !navigator.onLine;
   syncing = false;
   if (changed) { try { await DB.set('data', data); } catch (e) {} }
   if (!document.querySelector('dialog[open]')) render();
 }
-const syncTimers = {};
-function scheduleSync(id) {
+let syncTimer;
+function scheduleSync() {
   if (!syncReady()) return;
-  clearTimeout(syncTimers[id]);
-  syncTimers[id] = setTimeout(syncAll, 800);
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncAll, 800);
 }
-function syncLabel(t) {
-  if (!t.syncKey) return '';
-  if (!syncReady()) return 'ยังไม่ได้ตั้งค่าซิงก์';
-  const s = syncState[t.id];
-  if (!s) return 'กำลังซิงก์…';
-  const hm = new Date(s.at).toTimeString().slice(0, 5);
-  return s.ok ? `ซิงก์แล้ว ${hm}` : s.offline ? 'ออฟไลน์ · จะซิงก์เมื่อมีเน็ต' : 'ซิงก์ไม่สำเร็จ · จะลองใหม่';
-}
-function newKey() {
-  const b = crypto.getRandomValues(new Uint8Array(18));
-  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-function inviteLink(t) { return `${location.origin}${location.pathname}#/join/${encodeURIComponent(t.id)}/${t.syncKey}`; }
-
-async function joinTrip(id, key) {
-  if (!syncReady()) { toast('ยังไม่ได้ตั้งค่าซิงก์'); return false; }
-  try {
-    const res = await rpc('trip_get', { p_id: id, p_secret: key });
-    if (!res) { toast('ไม่พบทริป หรือรหัสไม่ถูกต้อง'); return false; }
-    const t = fromRemote(res.data, trip(id), key);
-    t.syncBase = structuredClone(res.data); t.syncedAt = res.updated_at; t.updatedAt = res.updated_at;
-    putTrip(t);
-    syncState[id] = { ok: true, at: Date.now() };
-    await save();
-    toast('เชื่อมทริปแล้ว');
-    return true;
-  } catch (e) { toast('เชื่อมไม่สำเร็จ ลองใหม่เมื่อมีเน็ต'); return false; }
+function syncLabel() {
+  if (!syncReady()) return '';
+  if (!syncState.at) return 'กำลังซิงก์…';
+  const hm = new Date(syncState.at).toTimeString().slice(0, 5);
+  return syncState.ok ? `ซิงก์แล้ว ${hm}` : syncState.offline ? 'ออฟไลน์ · จะซิงก์เมื่อมีเน็ต' : 'ซิงก์ไม่สำเร็จ · จะลองใหม่';
 }
 
 /* ---------- helpers ---------- */
@@ -404,11 +443,11 @@ function tripHead(t) {
     <div class="row between">
       <a class="icon-btn glass" href="#/" aria-label="กลับหน้าแรก">${ic.back}</a>
       <span class="row" style="gap:8px">
-        <button class="icon-btn glass" data-act="syncMenu" data-id="${t.id}" aria-label="ซิงก์กับอีกเครื่อง">${ic.sync}</button>
+        ${syncReady() ? `<button class="icon-btn glass" data-act="syncMenu" aria-label="ซิงก์กับอีกเครื่อง">${ic.sync}</button>` : ''}
         <button class="icon-btn glass" data-act="editTrip" data-id="${t.id}" aria-label="แก้ไขทริป">${ic.edit}</button>
       </span>
     </div>
-    <div class="stack-s"><h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span>${t.syncKey ? `<span class="tiny">${syncLabel(t)}</span>` : ''}</div>
+    <div class="stack-s"><h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span>${syncReady() ? `<span class="tiny">${syncLabel()}</span>` : ''}</div>
     ${(t.cities || []).length ? `<div class="grid-3">${t.cities.map((c) => {
       const n = t.hotels.filter((x) => x.city === c.name).reduce((s, x) => s + nights(x), 0);
       return `<div class="city-tile"><span class="code">${h(c.code || '—')}</span><span class="small">${h(c.name)}</span><span class="tiny">${n} คืน</span></div>`;
@@ -830,51 +869,19 @@ const actions = {
   async copy({ text }) {
     try { await navigator.clipboard.writeText(text); toast('คัดลอกแล้ว'); } catch (e) { toast(text); }
   },
-  syncMenu({ id }) {
-    const t = trip(id);
-    if (!syncReady()) { toast('ยังไม่ได้ตั้งค่า Supabase (config.js)'); return; }
-    if (!t.syncKey) {
-      openMenu('ซิงก์ทริปนี้', [
-        { label: 'เปิดซิงก์ แล้วส่งลิงก์ให้อีกคน', hint: 'เครื่องนี้จะเป็นต้นฉบับ แล้วส่งลิงก์ให้อีกเครื่องกดเข้าร่วม', run: async () => {
-          t.syncKey = newKey(); await save(t); await syncAll(); shareInvite(t);
-        } },
-        { label: 'เข้าร่วมด้วยลิงก์ที่ได้รับ', hint: 'ข้อมูลทริปในเครื่องนี้จะถูกแทนด้วยของอีกเครื่อง (QR และพาสปอร์ตยังอยู่)', run: () => actions.joinPrompt() },
-      ]);
-      return;
-    }
-    openMenu(`ซิงก์ · ${syncLabel(t)}`, [
-      { label: 'ซิงก์ตอนนี้', run: () => syncAll() },
-      { label: 'ส่งลิงก์ให้อีกคนอีกครั้ง', run: () => shareInvite(t) },
-      { label: 'หยุดซิงก์ในเครื่องนี้', hint: 'ข้อมูลยังอยู่ในเครื่อง แต่จะไม่รับ/ส่งการแก้ไขอีก', run: async () => { delete t.syncKey; delete t.syncBase; delete t.syncedAt; delete t.edits; await save(); render(); } },
+  syncMenu() {
+    openMenu(`ซิงก์ · ${syncLabel()}`, [
+      { label: 'ซิงก์ตอนนี้', hint: 'ปกติแอปซิงก์เองทุก 15 วินาที และทุกครั้งที่เปิดแอป', run: () => syncAll() },
     ]);
-  },
-  joinPrompt() {
-    openSheet({
-      title: 'เข้าร่วมทริป', submit: 'เข้าร่วม',
-      fields: [{ k: 'link', l: 'วางลิงก์ที่ได้รับ', t: 'textarea', req: true, ph: 'https://premfren.github.io/#/join/…' }],
-      onSave: async (v) => {
-        const m = v.link.match(/#\/join\/([^/\s]+)\/([A-Za-z0-9_-]{16,})/);
-        if (!m) { toast('ลิงก์ไม่ถูกต้อง'); return; }
-        const id = decodeURIComponent(m[1]);
-        if (await joinTrip(id, m[2])) location.hash = `#/t/${id}`;
-      },
-    });
   },
   backupMenu() {
     openMenu('สำรอง / ย้ายข้อมูล', [
-      { label: 'เข้าร่วมทริปด้วยลิงก์', hint: 'วางลิงก์ซิงก์ที่อีกคนส่งมา', run: () => actions.joinPrompt() },
       { label: 'ส่งออกไฟล์สำรอง (.json)', hint: 'เก็บไว้ หรือย้ายไปเครื่องอื่น', run: exportData },
       { label: 'นำเข้าไฟล์สำรอง', hint: 'ทริปที่มีอยู่แล้วจะถูกแทนที่ด้วยข้อมูลในไฟล์', run: importData },
+      ...(CFG.passwordCheck ? [{ label: 'ล็อกแอป', hint: 'ลืมรหัสที่จำไว้ในเครื่องนี้ ต้องใส่รหัสใหม่ตอนเปิดครั้งหน้า', run: lockApp }] : []),
     ]);
   },
 };
-
-async function shareInvite(t) {
-  const url = inviteLink(t);
-  const text = `ลิงก์เข้าร่วมทริป "${t.name}" — เปิดแอปทริปของเรา แล้วกดปุ่มซิงก์ › เข้าร่วมด้วยลิงก์ แล้ววางลิงก์นี้\n${url}`;
-  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
-  try { await navigator.clipboard.writeText(url); toast('คัดลอกลิงก์แล้ว ส่งให้อีกคนได้เลย'); } catch (e) { prompt('คัดลอกลิงก์นี้', url); }
-}
 
 async function exportData() {
   const name = `trip-backup-${todayISO()}.json`;
@@ -896,9 +903,10 @@ function importData() {
       if (!Array.isArray(incoming.trips)) throw new Error('bad');
       for (const t of incoming.trips) {
         const i = data.trips.findIndex((x) => x.id === t.id);
+        t.edits = (t.edits || 0) + 1;
         if (i >= 0) data.trips[i] = t; else data.trips.push(t);
       }
-      await save(); render(); toast(`นำเข้า ${incoming.trips.length} ทริปแล้ว`);
+      await save(); scheduleSync(); render(); toast(`นำเข้า ${incoming.trips.length} ทริปแล้ว`);
     } catch (e) { toast('ไฟล์นี้นำเข้าไม่ได้'); }
   };
   input.click();
@@ -920,6 +928,33 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), 2200);
 }
 
+/* ---------- password screen ---------- */
+
+function viewLock() {
+  document.documentElement.style.setProperty('--accent', '#C8372D');
+  $app.innerHTML = `<main class="screen lock">
+    <div class="stack-s"><span class="eyebrow">Prem &amp; Fren</span><h1 class="title-xl">ทริปของเรา</h1></div>
+    <form class="stack" novalidate>
+      <div class="field"><label for="pw">รหัสผ่าน</label><input id="pw" name="pw" type="password" autocomplete="current-password" required></div>
+      <label class="row small"><input type="checkbox" name="remember" checked> จำรหัสผ่านในเครื่องนี้</label>
+      <button class="btn block primary" type="submit">เข้าแอป</button>
+      <p class="tiny muted" role="status" aria-live="polite"></p>
+    </form>
+  </main>`;
+  const form = $app.querySelector('form');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button'), msg = form.querySelector('[role="status"]');
+    if (!form.pw.value) { form.pw.focus(); return; }
+    btn.disabled = true; msg.textContent = 'กำลังตรวจรหัส…';
+    let ok = false;
+    try { ok = await unlock(form.pw.value, form.remember.checked); } catch (err) { msg.textContent = 'ตรวจรหัสไม่ได้ในเบราว์เซอร์นี้'; btn.disabled = false; return; }
+    if (!ok) { msg.textContent = 'รหัสผ่านไม่ถูกต้อง'; btn.disabled = false; form.pw.select(); return; }
+    render(); syncAll();
+  };
+  form.pw.focus();
+}
+
 /* ---------- router ---------- */
 
 let lastHash = null;
@@ -928,12 +963,7 @@ let wakeLock = null;
 function render() {
   const hash = location.hash || '#/';
   const parts = hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
-  if (parts[0] === 'join' && parts[2]) {
-    $app.innerHTML = '<p class="screen muted">กำลังเชื่อมทริป…</p>';
-    const id = parts[1];
-    joinTrip(id, parts[2]).then((ok) => location.replace(ok ? `#/t/${encodeURIComponent(id)}` : '#/'));
-    return;
-  }
+  if (needsPassword()) { viewLock(); return; }
   const t = parts[0] === 't' ? trip(parts[1]) : null;
   let html;
   if (!t) { html = viewHome(); document.documentElement.style.setProperty('--accent', '#C8372D'); }
@@ -969,6 +999,7 @@ window.addEventListener('hashchange', render);
 
 (async () => {
   await load();
+  readStoredSecret();
   render();
   syncAll();
   setInterval(() => { if (document.visibilityState === 'visible') syncAll(); }, 15000);
