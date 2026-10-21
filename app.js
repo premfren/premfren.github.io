@@ -138,6 +138,10 @@ function lockApp() {
   render();
 }
 
+/* server rows live under a prefix of the password's secret: a new password starts
+   clean, and rows left by older versions (or anyone else) never block ours */
+const rid = (id) => `${SECRET.slice(0, 12)}.${id}`;
+
 async function rpc(fn, body) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
@@ -228,7 +232,7 @@ async function syncTrip(id) {
   if (!syncReady() || !t) return false;
   let changed = false;
   try {
-    const res = await rpc('trip_get', { p_id: id, p_secret: SECRET });
+    const res = await rpc('trip_get', { p_id: rid(id), p_secret: SECRET });
     t = trip(id);
     if (!t) return false;
     // edits counts local saves not yet on the server (clock-free, phones' clocks may differ)
@@ -245,7 +249,7 @@ async function syncTrip(id) {
       const before = t.edits;
       const stamp = Math.max(Date.now(), (res?.updated_at || 0) + 1);
       out.updatedAt = stamp;
-      const put = await rpc('trip_put', { p_id: id, p_secret: SECRET, p_data: out, p_updated_at: stamp });
+      const put = await rpc('trip_put', { p_id: rid(id), p_secret: SECRET, p_data: out, p_updated_at: stamp });
       t = trip(id);
       if (put && put.ok === false) scheduleSync();         // lost a race: merge again with the newer copy
       else if (!t) { /* deleted meanwhile */ }
@@ -263,20 +267,20 @@ async function syncTrip(id) {
 /* which trips exist is itself a synced list, so a trip added or deleted on one phone follows on the other */
 const INDEX_ID = '_trips';
 async function syncIndex() {
-  const res = await rpc('trip_get', { p_id: INDEX_ID, p_secret: SECRET });
+  const res = await rpc('trip_get', { p_id: rid(INDEX_ID), p_secret: SECRET });
   const local = { trips: data.trips.map((t) => ({ id: t.id })) };
   const merged = res ? merge3(data.indexBase, local, res.data) : local;
   let changed = false;
   for (const { id } of merged.trips) {
     if (trip(id)) continue;
-    const r = await rpc('trip_get', { p_id: id, p_secret: SECRET });
+    const r = await rpc('trip_get', { p_id: rid(id), p_secret: SECRET });
     if (!r) return false;  // not uploaded yet: leave the list alone this round
     adopt({ id }, r.data, r.updated_at); changed = true;
   }
   const keep = new Set(merged.trips.map((x) => x.id));
   if (data.trips.some((t) => !keep.has(t.id))) { data.trips = data.trips.filter((t) => keep.has(t.id)); changed = true; }
   if (!res || !same(merged, res.data)) {
-    const put = await rpc('trip_put', { p_id: INDEX_ID, p_secret: SECRET, p_data: merged, p_updated_at: Math.max(Date.now(), (res?.updated_at || 0) + 1) });
+    const put = await rpc('trip_put', { p_id: rid(INDEX_ID), p_secret: SECRET, p_data: merged, p_updated_at: Math.max(Date.now(), (res?.updated_at || 0) + 1) });
     if (put && put.ok === false) { scheduleSync(); return changed; }
   }
   const baseMoved = !same(data.indexBase, merged);
