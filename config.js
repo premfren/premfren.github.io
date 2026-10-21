@@ -3,5 +3,5 @@
 // trip_get / trip_put functions, and each trip needs its own secret link.
 window.TRIP_CONFIG = {
   supabaseUrl: '',      // e.g. 'https://abcdefgh.supabase.co'
-  supabaseAnonKey: '',  // Project Settings › API › anon public key
+  supabaseAnonKey: '',  // Project Settings › API Keys › publishable key (sb_publishable_…) or legacy anon key
 };

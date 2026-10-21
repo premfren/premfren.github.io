@@ -95,7 +95,7 @@ function migrate() {
 
 /* pass the trip that changed: it is stamped for sync and pushed shortly after */
 async function save(t) {
-  if (t) t.updatedAt = Date.now();
+  if (t) { t.updatedAt = Date.now(); t.edits = (t.edits || 0) + 1; }
   try { await DB.set('data', data); } catch (e) { toast('บันทึกไม่สำเร็จ'); }
   if (t) scheduleSync(t.id);
 }
@@ -114,7 +114,12 @@ async function rpc(fn, body) {
   try {
     const r = await fetch(`${CFG.supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/${fn}`, {
       method: 'POST',
-      headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${CFG.supabaseAnonKey}`, 'Content-Type': 'application/json' },
+      headers: {
+        apikey: CFG.supabaseAnonKey,
+        // legacy anon keys are JWTs and go in Authorization too; new sb_publishable_ keys must not
+        ...(CFG.supabaseAnonKey.startsWith('eyJ') ? { Authorization: `Bearer ${CFG.supabaseAnonKey}` } : {}),
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
@@ -125,7 +130,7 @@ async function rpc(fn, body) {
 
 function toRemote(t) {
   const c = structuredClone(t);
-  delete c.syncKey;
+  delete c.syncKey; delete c.syncBase; delete c.syncedAt; delete c.edits;
   c.people = (c.people || []).map((p) => { const q = { ...p }; LOCAL_ONLY.forEach((k) => delete q[k]); return q; });
   return c;
 }
@@ -144,21 +149,79 @@ function putTrip(t) {
   const i = data.trips.findIndex((x) => x.id === t.id);
   if (i >= 0) data.trips[i] = t; else data.trips.push(t);
 }
+/* take the server copy as is; it also becomes the base for the next merge */
+function adopt(t, remote, at) {
+  const n = fromRemote(remote, t, t.syncKey);
+  n.syncBase = structuredClone(remote); n.syncedAt = at; n.updatedAt = at;
+  putTrip(n);
+}
 
-/* last write wins per trip: whichever side has the newer updatedAt */
+/* three-way merge against the last synced copy, so edits made on both phones
+   (even offline) are kept: lists merge item by item via id, objects field by
+   field, and only a field changed on both sides is settled in favour of local */
+function same(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => same(a[k], b[k]));
+}
+const isIdList = (x) => Array.isArray(x) && x.every((o) => o && typeof o === 'object' && 'id' in o);
+function merge3(b, l, r) {
+  if (same(l, r)) return l;
+  if (same(l, b)) return r;
+  if (same(r, b)) return l;
+  if (isIdList(l) && isIdList(r)) return mergeList(isIdList(b) ? b : [], l, r);
+  if (l && r && typeof l === 'object' && typeof r === 'object' && !Array.isArray(l) && !Array.isArray(r)) {
+    const o = {}, bb = b && typeof b === 'object' ? b : {};
+    for (const k of new Set([...Object.keys(r), ...Object.keys(l)])) {
+      const v = merge3(bb[k], l[k], r[k]);
+      if (v !== undefined) o[k] = v;
+    }
+    return o;
+  }
+  return l;
+}
+function mergeList(b, l, r) {
+  const find = (list, id) => list.find((x) => x.id === id);
+  const out = [];
+  for (const it of [...r, ...l.filter((x) => !find(r, x.id))]) {
+    const bi = find(b, it.id), li = find(l, it.id), ri = find(r, it.id);
+    if (li && ri) out.push(merge3(bi, li, ri));
+    else if (!bi) out.push(li || ri);                  // added on one side
+    else if (li && !same(li, bi)) out.push(li);        // deleted there, edited here: keep
+    else if (ri && !same(ri, bi)) out.push(ri);        // deleted here, edited there: keep
+  }
+  return out;
+}
+
 async function syncTrip(id) {
-  const t = trip(id);
+  let t = trip(id);
   if (!syncReady() || !t || !t.syncKey) return false;
   let changed = false;
   try {
     const res = await rpc('trip_get', { p_id: t.id, p_secret: t.syncKey });
-    const local = t.updatedAt || 0;
-    if (res && res.updated_at > local) {
-      putTrip(fromRemote(res.data, t, t.syncKey)); changed = true;
-    } else if (!res || res.updated_at < local) {
-      if (!t.updatedAt) t.updatedAt = Date.now();
-      const put = await rpc('trip_put', { p_id: t.id, p_secret: t.syncKey, p_data: toRemote(t), p_updated_at: t.updatedAt });
-      if (put && put.ok === false) { putTrip(fromRemote(put.data, t, t.syncKey)); changed = true; }
+    t = trip(id);
+    if (!t || !t.syncKey) return false;
+    // edits counts local saves not yet on the server (clock-free, phones' clocks may differ)
+    const dirty = t.syncBase ? (t.edits || 0) > 0 : !t.syncedAt || (t.updatedAt || 0) > t.syncedAt;
+    let out = null;
+    if (res && res.updated_at !== t.syncedAt) {
+      // the other phone saved since our last sync
+      if (!dirty) { adopt(t, res.data, res.updated_at); changed = true; }
+      else if (t.syncBase) out = merge3(t.syncBase, toRemote(t), res.data);
+      else if ((t.updatedAt || 0) > res.updated_at) out = toRemote(t);  // trips synced before merging existed
+      else { adopt(t, res.data, res.updated_at); changed = true; }
+    } else if (dirty) out = toRemote(t);
+    if (out) {
+      const before = t.edits;
+      const stamp = Math.max(Date.now(), (res?.updated_at || 0) + 1);
+      out.updatedAt = stamp;
+      const put = await rpc('trip_put', { p_id: t.id, p_secret: t.syncKey, p_data: out, p_updated_at: stamp });
+      t = trip(id);
+      if (put && put.ok === false) scheduleSync(id);       // lost a race: merge again with the newer copy
+      else if (!t || !t.syncKey) { /* stopped syncing meanwhile */ }
+      else if (t.edits !== before) scheduleSync(id);   // edited during upload: next round merges it in
+      else { adopt(t, out, stamp); changed = true; }
     }
     syncState[id] = { ok: true, at: Date.now() };
   } catch (e) {
@@ -202,7 +265,9 @@ async function joinTrip(id, key) {
   try {
     const res = await rpc('trip_get', { p_id: id, p_secret: key });
     if (!res) { toast('ไม่พบทริป หรือรหัสไม่ถูกต้อง'); return false; }
-    putTrip(fromRemote(res.data, trip(id), key));
+    const t = fromRemote(res.data, trip(id), key);
+    t.syncBase = structuredClone(res.data); t.syncedAt = res.updated_at; t.updatedAt = res.updated_at;
+    putTrip(t);
     syncState[id] = { ok: true, at: Date.now() };
     await save();
     toast('เชื่อมทริปแล้ว');
@@ -780,7 +845,7 @@ const actions = {
     openMenu(`ซิงก์ · ${syncLabel(t)}`, [
       { label: 'ซิงก์ตอนนี้', run: () => syncAll() },
       { label: 'ส่งลิงก์ให้อีกคนอีกครั้ง', run: () => shareInvite(t) },
-      { label: 'หยุดซิงก์ในเครื่องนี้', hint: 'ข้อมูลยังอยู่ในเครื่อง แต่จะไม่รับ/ส่งการแก้ไขอีก', run: async () => { delete t.syncKey; await save(); render(); } },
+      { label: 'หยุดซิงก์ในเครื่องนี้', hint: 'ข้อมูลยังอยู่ในเครื่อง แต่จะไม่รับ/ส่งการแก้ไขอีก', run: async () => { delete t.syncKey; delete t.syncBase; delete t.syncedAt; delete t.edits; await save(); render(); } },
     ]);
   },
   joinPrompt() {
@@ -906,7 +971,7 @@ window.addEventListener('hashchange', render);
   await load();
   render();
   syncAll();
-  setInterval(() => { if (document.visibilityState === 'visible') syncAll(); }, 30000);
+  setInterval(() => { if (document.visibilityState === 'visible') syncAll(); }, 15000);
   window.addEventListener('online', syncAll);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncAll(); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
