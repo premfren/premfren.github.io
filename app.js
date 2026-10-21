@@ -293,8 +293,9 @@ async function syncAll() {
     // trips first, so a new trip is on the server before the list points to it
     for (const t of [...data.trips]) changed = (await syncTrip(t.id)) || changed;
     changed = (await syncIndex()) || changed;
+    syncState.error = '';
   } catch (e) {
-    syncState.ok = false;
+    syncState.ok = false; syncState.error = String(e.message || e).slice(0, 300);
   }
   syncState.at = Date.now(); syncState.offline = !navigator.onLine;
   syncing = false;
@@ -871,7 +872,7 @@ const actions = {
   },
   syncMenu() {
     openMenu(`ซิงก์ · ${syncLabel()}`, [
-      { label: 'ซิงก์ตอนนี้', hint: 'ปกติแอปซิงก์เองทุก 15 วินาที และทุกครั้งที่เปิดแอป', run: () => syncAll() },
+      { label: 'ซิงก์ตอนนี้', hint: syncState.error ? `สาเหตุ: ${syncState.error}` : 'ปกติแอปซิงก์เองทุก 15 วินาที และทุกครั้งที่เปิดแอป', run: () => syncAll() },
     ]);
   },
   backupMenu() {
