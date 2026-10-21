@@ -391,6 +391,7 @@ const ic = {
   copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
   more: svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', 2.5),
   sync: svg('<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>'),
+  check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2.5),
   car: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/>', 1.8),
 };
 
@@ -464,6 +465,7 @@ function tabs(t, active) {
   return `<nav class="tabs" aria-label="ส่วนของทริป">
     <a href="#/t/${t.id}" ${active === 'plan' ? 'aria-current="page"' : ''}>แผนรายวัน</a>
     <a href="#/t/${t.id}/docs" ${active === 'docs' ? 'aria-current="page"' : ''}>ข้อมูลสำคัญ</a>
+    <a href="#/t/${t.id}/pack" ${active === 'pack' ? 'aria-current="page"' : ''}>เช็คลิสต์</a>
   </nav>`;
 }
 
@@ -617,6 +619,46 @@ function viewDocs(t, filter) {
         <div class="row between"><h2 class="h2">อื่น ๆ</h2><button class="link-accent" data-act="addNote" data-id="${t.id}">+ เพิ่ม</button></div>
         <div class="card">${t.notes.map((n) => `<button class="kv" style="width:100%;background:none;border-left:0;border-right:0;border-top:0;text-align:left" data-act="editNote" data-id="${t.id}" data-nid="${n.id}"><span>${h(n.label)}</span><span class="v">${h(n.value) || '—'}</span></button>`).join('') || '<p class="kv muted">ยังไม่มีข้อมูล</p>'}</div>
       </section>` : ''}
+    </div>
+  </div>`;
+}
+
+/* starter packing list for a late-autumn China trip; ids are fixed per person so
+   pressing it on both phones before they sync merges instead of duplicating */
+const PACK_STARTER = [
+  'พาสปอร์ต (อายุเหลือเกิน 6 เดือน)', 'QR ตม. / ใบขาเข้า', 'ตั๋วเครื่องบิน + ใบจองที่พัก', 'เงินหยวน + บัตรเครดิต',
+  'Alipay / WeChat Pay ผูกบัตรแล้ว', 'eSIM / ซิมจีน', 'แอป Amap, Didi, แปลภาษา', 'มือถือ + สายชาร์จ',
+  'พาวเวอร์แบงก์ (ถือขึ้นเครื่อง)', 'ปลั๊กแปลง', 'เสื้อกันหนาว / แจ็คเก็ต', 'เสื้อผ้า + ชุดนอน',
+  'รองเท้าเดินสบาย', 'ยาประจำตัว + ยาสามัญ', 'แปรงสีฟัน + ของใช้ส่วนตัว', 'ทิชชู่ / ทิชชู่เปียก',
+];
+
+function viewPack(t, pid) {
+  const people = t.people || [];
+  const p = people.find((x) => x.id === pid) || people[0];
+  const all = t.packing || [];
+  const mine = p ? all.filter((x) => x.pid === p.id) : [];
+  const done = mine.filter((x) => x.done).length;
+  return `<div class="screen flush">
+    ${tripHead(t)}
+    <div class="pad stack" style="gap:20px">
+      ${tabs(t, 'pack')}
+      ${p ? `<div class="filters" role="group" aria-label="เลือกผู้เดินทาง">
+        ${people.map((x) => {
+          const list = all.filter((i) => i.pid === x.id);
+          return `<a class="filter row" href="#/t/${t.id}/pack/${x.id}" aria-pressed="${x.id === p.id}">${h(x.name)} <span style="opacity:.7;font-weight:500">${list.filter((i) => i.done).length}/${list.length}</span></a>`;
+        }).join('')}
+      </div>
+      <section class="stack">
+        <div class="row between"><h2 class="h2">ของที่ ${h(p.name)} ต้องเตรียม</h2><button class="link-accent" data-act="addPack" data-id="${t.id}" data-pid="${p.id}">+ เพิ่ม</button></div>
+        ${mine.length ? `<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${mine.length}" aria-valuenow="${done}" aria-label="เตรียมแล้ว"><span style="width:${(done / mine.length) * 100}%"></span></div>
+        <p class="small muted">${done === mine.length ? 'ครบแล้ว พร้อมออกเดินทาง' : `เตรียมแล้ว ${done} จาก ${mine.length} · เหลือ ${mine.length - done}`}</p>
+        <ul class="card checklist">${mine.map((x) => `<li>
+          <button class="check" data-act="togglePack" data-id="${t.id}" data-iid="${x.id}" aria-pressed="${!!x.done}"><span class="box" aria-hidden="true">${x.done ? ic.check : ''}</span><span class="grow">${h(x.text)}</span></button>
+          <button class="icon-btn plain" data-act="editPack" data-id="${t.id}" data-iid="${x.id}" aria-label="แก้ไข ${h(x.text)}">${ic.edit}</button>
+        </li>`).join('')}</ul>` : `<p class="muted small">ยังไม่มีรายการของ ${h(p.name)}</p>
+        <button class="btn block" data-act="packStarter" data-id="${t.id}" data-pid="${p.id}">ใส่รายการพื้นฐาน (${PACK_STARTER.length} อย่าง)</button>`}
+        ${mine.length ? `<button class="btn dashed block" data-act="addPack" data-id="${t.id}" data-pid="${p.id}">+ เพิ่มของ</button>` : ''}
+      </section>` : '<p class="muted">เพิ่มผู้เดินทางในแท็บข้อมูลสำคัญก่อน แล้วเช็คลิสต์ของแต่ละคนจะขึ้นที่นี่</p>'}
     </div>
   </div>`;
 }
@@ -790,6 +832,7 @@ const PERSON_FIELDS = [
   { k: 'passportNo', l: 'เลขพาสปอร์ต', half: true },
   { k: 'passportExp', l: 'วันหมดอายุ', t: 'date', half: true },
 ];
+const PACK_FIELDS = [{ k: 'text', l: 'ของที่ต้องเตรียม', req: true, ph: 'เช่น กล้อง + เมมโมรี่การ์ด' }];
 const NOTE_FIELDS = [
   { k: 'label', l: 'หัวข้อ', req: true },
   { k: 'value', l: 'รายละเอียด', t: 'textarea' },
@@ -869,6 +912,24 @@ const actions = {
   editPerson({ id, pid }) { const t = trip(id); editItem(t, 'people', PERSON_FIELDS, t.people.find((x) => x.id === pid), 'ผู้เดินทาง / QR ตม.'); },
   addNote({ id }) { const t = trip(id); editItem(t, 'notes', NOTE_FIELDS, null, 'เพิ่มข้อมูล'); },
   editNote({ id, nid }) { const t = trip(id); editItem(t, 'notes', NOTE_FIELDS, t.notes.find((x) => x.id === nid), 'แก้ไขข้อมูล'); },
+  addPack({ id, pid }) {
+    const t = trip(id);
+    openSheet({
+      title: 'เพิ่มของ', fields: PACK_FIELDS,
+      onSave: async (v) => { (t.packing ||= []).push({ id: uid(), pid, text: v.text, done: false }); await save(t); render(); },
+    });
+  },
+  editPack({ id, iid }) { const t = trip(id); editItem(t, 'packing', PACK_FIELDS, t.packing.find((x) => x.id === iid), 'แก้ไขรายการ'); },
+  async togglePack({ id, iid }) {
+    const t = trip(id); const x = (t.packing || []).find((i) => i.id === iid);
+    if (!x) return;
+    x.done = !x.done; await save(t); render();
+  },
+  async packStarter({ id, pid }) {
+    const t = trip(id); const list = (t.packing ||= []);
+    PACK_STARTER.forEach((text, i) => { if (!list.some((x) => x.id === `${pid}-s${i}`)) list.push({ id: `${pid}-s${i}`, pid, text, done: false }); });
+    await save(t); render();
+  },
   goQR({ id, pid }) { location.replace(`#/t/${id}/qr/${pid}`); },
   back() { history.length > 1 ? history.back() : (location.hash = '#/'); },
   async copy({ text }) {
@@ -979,6 +1040,7 @@ function render() {
     else if (view === 'docs') html = viewDocs(t, parts[3]);
     else if (view === 'qr') html = viewQR(t, parts[3]);
     else if (view === 'taxi') html = viewTaxi(t, parts[3]);
+    else if (view === 'pack') html = viewPack(t, parts[3]);
     else html = viewTrip(t);
   }
   $app.innerHTML = html;
@@ -986,7 +1048,7 @@ function render() {
   document.querySelector('meta[name="theme-color"]').setAttribute('content', fullDark ? '#14202B' : '#F2F4F7');
   toggleWakeLock(fullDark || !!$app.querySelector('.taxi'));
   if (hash !== lastHash) {
-    const samePage = lastHash && lastHash.split('/').slice(0, 3).join('/') === hash.split('/').slice(0, 3).join('/') && /\/(d|docs)\//.test(hash);
+    const samePage = lastHash && lastHash.split('/').slice(0, 3).join('/') === hash.split('/').slice(0, 3).join('/') && /\/(d|docs|pack)\//.test(hash);
     if (!samePage) window.scrollTo(0, 0);
     $app.querySelector('.pill-day[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
     lastHash = hash;

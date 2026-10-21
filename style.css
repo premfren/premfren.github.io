@@ -221,3 +221,16 @@ dialog.sheet::backdrop { background: rgba(20,32,43,.45); }
 .lock { justify-content: center; padding-bottom: 20vh; }
 .lock input[type="checkbox"] { width: 20px; height: 20px; margin: 0; accent-color: var(--ink); }
 .lock label.row { min-height: 44px; }
+
+/* packing checklist */
+.progress { height: 8px; border-radius: 4px; background: #E3E7EC; overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .2s; }
+.checklist { list-style: none; margin: 0; padding: 0; }
+.checklist li { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.checklist li:last-child { border-bottom: 0; }
+.check { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 4px 8px 14px; background: none; border: 0; text-align: left; font-size: 15px; }
+.check .box { width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px; border: 2px solid var(--line-2); display: flex; align-items: center; justify-content: center; color: #fff; }
+.check .box .icon { width: 16px; height: 16px; }
+.check[aria-pressed="true"] .box { background: var(--accent); border-color: var(--accent); }
+.check[aria-pressed="true"] .grow { color: var(--muted); text-decoration: line-through; }
+.icon-btn.plain { border-color: transparent; background: none; color: var(--muted); }
