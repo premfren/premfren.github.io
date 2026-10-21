@@ -631,9 +631,15 @@ const PACK_STARTER = [
   'พาวเวอร์แบงก์ (ถือขึ้นเครื่อง)', 'ปลั๊กแปลง', 'เสื้อกันหนาว / แจ็คเก็ต', 'เสื้อผ้า + ชุดนอน',
   'รองเท้าเดินสบาย', 'ยาประจำตัว + ยาสามัญ', 'แปรงสีฟัน + ของใช้ส่วนตัว', 'ทิชชู่ / ทิชชู่เปียก',
 ];
+const SHARED_STARTER = [
+  'ปลั๊กพ่วง / ปลั๊กสามตา', 'กุญแจล็อกกระเป๋า', 'ร่มพับ', 'ถุงซิป / ถุงผ้าพับได้', 'สำเนาพาสปอร์ต + รูปถ่ายสำรอง',
+  'เงินสดสำรอง (บาท + หยวน)', 'กรรไกร / ที่ตัดเล็บ (ใส่กระเป๋าโหลด)', 'ขวดน้ำพกพา', 'ยาแก้เมารถ + พลาสเตอร์',
+  'ผงซักฟอกแบบซอง', 'ขาตั้งมือถือ / ไม้เซลฟี่', 'เลขกรมธรรม์ประกันการเดินทาง',
+];
+const SHARED = { id: 'shared', name: 'ร่วมกัน' };
 
 function viewPack(t, pid) {
-  const people = t.people || [];
+  const people = (t.people || []).length ? [...t.people, SHARED] : [];
   const p = people.find((x) => x.id === pid) || people[0];
   const all = t.packing || [];
   const mine = p ? all.filter((x) => x.pid === p.id) : [];
@@ -649,14 +655,14 @@ function viewPack(t, pid) {
         }).join('')}
       </div>
       <section class="stack">
-        <div class="row between"><h2 class="h2">ของที่ ${h(p.name)} ต้องเตรียม</h2><button class="link-accent" data-act="addPack" data-id="${t.id}" data-pid="${p.id}">+ เพิ่ม</button></div>
+        <div class="row between"><h2 class="h2">${p === SHARED ? 'ของใช้ร่วมกัน' : `ของที่ ${h(p.name)} ต้องเตรียม`}</h2><button class="link-accent" data-act="addPack" data-id="${t.id}" data-pid="${p.id}">+ เพิ่ม</button></div>
         ${mine.length ? `<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${mine.length}" aria-valuenow="${done}" aria-label="เตรียมแล้ว"><span style="width:${(done / mine.length) * 100}%"></span></div>
         <p class="small muted">${done === mine.length ? 'ครบแล้ว พร้อมออกเดินทาง' : `เตรียมแล้ว ${done} จาก ${mine.length} · เหลือ ${mine.length - done}`}</p>
         <ul class="card checklist">${mine.map((x) => `<li>
           <button class="check" data-act="togglePack" data-id="${t.id}" data-iid="${x.id}" aria-pressed="${!!x.done}"><span class="box" aria-hidden="true">${x.done ? ic.check : ''}</span><span class="grow">${h(x.text)}</span></button>
           <button class="icon-btn plain" data-act="editPack" data-id="${t.id}" data-iid="${x.id}" aria-label="แก้ไข ${h(x.text)}">${ic.edit}</button>
-        </li>`).join('')}</ul>` : `<p class="muted small">ยังไม่มีรายการของ ${h(p.name)}</p>
-        <button class="btn block" data-act="packStarter" data-id="${t.id}" data-pid="${p.id}">ใส่รายการพื้นฐาน (${PACK_STARTER.length} อย่าง)</button>`}
+        </li>`).join('')}</ul>` : `<p class="muted small">${p === SHARED ? 'ยังไม่มีของใช้ร่วมกัน · ติ๊กโดยใครก็ได้ อีกเครื่องเห็นด้วย' : `ยังไม่มีรายการของ ${h(p.name)}`}</p>
+        <button class="btn block" data-act="packStarter" data-id="${t.id}" data-pid="${p.id}">ใส่รายการพื้นฐาน (${(p === SHARED ? SHARED_STARTER : PACK_STARTER).length} อย่าง)</button>`}
         ${mine.length ? `<button class="btn dashed block" data-act="addPack" data-id="${t.id}" data-pid="${p.id}">+ เพิ่มของ</button>` : ''}
       </section>` : '<p class="muted">เพิ่มผู้เดินทางในแท็บข้อมูลสำคัญก่อน แล้วเช็คลิสต์ของแต่ละคนจะขึ้นที่นี่</p>'}
     </div>
@@ -927,7 +933,7 @@ const actions = {
   },
   async packStarter({ id, pid }) {
     const t = trip(id); const list = (t.packing ||= []);
-    PACK_STARTER.forEach((text, i) => { if (!list.some((x) => x.id === `${pid}-s${i}`)) list.push({ id: `${pid}-s${i}`, pid, text, done: false }); });
+    (pid === SHARED.id ? SHARED_STARTER : PACK_STARTER).forEach((text, i) => { if (!list.some((x) => x.id === `${pid}-s${i}`)) list.push({ id: `${pid}-s${i}`, pid, text, done: false }); });
     await save(t); render();
   },
   goQR({ id, pid }) { location.replace(`#/t/${id}/qr/${pid}`); },
