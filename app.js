@@ -105,8 +105,8 @@ async function save(t) {
 const CFG = window.TRIP_CONFIG || {};
 const syncReady = () => !!(CFG.supabaseUrl && CFG.supabaseAnonKey && SECRET);
 const syncState = {};
-// QR images and passport details never leave the device
-const LOCAL_ONLY = ['qr', 'passportName', 'passportNo', 'passportExp'];
+// passport details never leave the device; QR images sync as separate rows (see pushImages)
+const LOCAL_ONLY = ['qr', 'qrHave', 'qrSig', 'qrUp', 'passportName', 'passportNo', 'passportExp'];
 
 /* ---------- password: one shared password unlocks the app and keys the sync ---------- */
 
@@ -227,11 +227,50 @@ function mergeList(b, l, r) {
   return out;
 }
 
+/* QR images are big, so the trip only carries qrRev (which image is current) and each
+   image is uploaded once as its own row, then downloaded by the other phone only when
+   qrRev changes. qrSig notices a picture added or removed on this phone. */
+function sig(str) {
+  if (!str) return '';
+  let x = 5381;
+  for (let i = 0; i < str.length; i += 7) x = (x * 33 + str.charCodeAt(i)) | 0;
+  return `${str.length}.${x}`;
+}
+async function pushImages(t) {
+  for (const p of t.people || []) {
+    if ((p.qrSig || '') !== sig(p.qr)) {
+      p.qrRev = p.qr ? uid() + uid() : ''; p.qrHave = p.qrRev; p.qrSig = sig(p.qr);
+      t.edits = (t.edits || 0) + 1;
+    }
+    if (p.qr && p.qrRev && p.qrUp !== p.qrRev) {
+      await rpc('trip_put', { p_id: rid(`img.${p.qrRev}`), p_secret: SECRET, p_data: { qr: p.qr }, p_updated_at: Date.now() });
+      p.qrUp = p.qrRev;
+    }
+  }
+}
+async function pullImages(id) {
+  let changed = false;
+  for (const p of trip(id)?.people || []) {
+    const want = p.qrRev || '';
+    if (want === (p.qrHave || '')) continue;
+    if (!want) p.qr = '';
+    else {
+      const r = await rpc('trip_get', { p_id: rid(`img.${want}`), p_secret: SECRET });
+      if (!r) continue;  // not uploaded yet: next round
+      if (p.qrRev !== want) continue;
+      p.qr = r.data.qr || '';
+    }
+    p.qrHave = want; p.qrSig = sig(p.qr); p.qrUp = want; changed = true;
+  }
+  return changed;
+}
+
 async function syncTrip(id) {
   let t = trip(id);
   if (!syncReady() || !t) return false;
   let changed = false;
   try {
+    await pushImages(t);
     const res = await rpc('trip_get', { p_id: rid(id), p_secret: SECRET });
     t = trip(id);
     if (!t) return false;
@@ -256,6 +295,7 @@ async function syncTrip(id) {
       else if (t.edits !== before) scheduleSync();         // edited during upload: next round merges it in
       else { adopt(t, out, stamp); changed = true; }
     }
+    changed = (await pullImages(id)) || changed;
     syncState.ok = true;
   } catch (e) {
     syncState.ok = false;
@@ -834,7 +874,7 @@ const HOTEL_FIELDS = [
 const PERSON_FIELDS = [
   { k: 'name', l: 'ชื่อเรียก', req: true },
   { k: 'qr', l: 'รูป QR ตม. (แคปหน้าจอจากแอป/เว็บ ตม.)', t: 'image' },
-  { k: 'passportName', l: 'ชื่อตามพาสปอร์ต' },
+  { k: 'passportName', l: 'ชื่อตามพาสปอร์ต (เก็บในเครื่องนี้เท่านั้น)' },
   { k: 'passportNo', l: 'เลขพาสปอร์ต', half: true },
   { k: 'passportExp', l: 'วันหมดอายุ', t: 'date', half: true },
 ];

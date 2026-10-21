@@ -4,7 +4,8 @@
 -- One row per trip holding the whole trip as JSON. The table is closed to the
 -- public API; clients can only read or write a trip through the two functions
 -- below, and only with that trip's secret (shared via the invite link).
--- QR images and passport details are stripped by the app before upload.
+-- Passport details are stripped by the app before upload; QR images are stored
+-- as their own rows so the trip row stays small.
 
 create extension if not exists pgcrypto with schema extensions;
 
