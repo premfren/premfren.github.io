@@ -432,60 +432,146 @@ const ic = {
   more: svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', 2.5),
   sync: svg('<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>'),
   check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2.5),
+  wallet: svg('<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/>', 1.8),
+  food: svg('<path d="M4 11h16a8 8 0 0 1-16 0z"/><path d="M8 7c0-1 1-2 1-3M12 7c0-1 1-2 1-3M16 7c0-1 1-2 1-3"/>', 1.8),
+  bag: svg('<path d="M6 7h12l1 13H5z"/><path d="M9 7a3 3 0 0 1 6 0"/>', 1.8),
+  arrow: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
   car: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/>', 1.8),
 };
 
+/* ---------- flags: drawn, not emoji, so they look the same on every phone ---------- */
+
+const STAR = '5.00,0.00 6.12,3.45 9.76,3.45 6.82,5.58 7.94,9.05 5.00,6.91 2.06,9.05 3.18,5.58 0.24,3.45 3.88,3.45';
+const FLAGS = {
+  TH: { name: 'ไทย', body: '<rect width="30" height="20" fill="#A51931"/><rect y="3.33" width="30" height="13.34" fill="#F4F5F8"/><rect y="6.67" width="30" height="6.66" fill="#2D2A4A"/>' },
+  CN: { name: 'จีน', body: '<rect width="30" height="20" fill="#DE2910"/><g fill="#FFDE00"><polygon points="5.00,2.00 5.67,4.07 7.85,4.07 6.09,5.35 6.76,7.43 5.00,6.15 3.24,7.43 3.91,5.35 2.15,4.07 4.33,4.07"/><polygon points="9.14,2.51 9.62,1.97 9.25,1.34 9.91,1.63 10.39,1.08 10.33,1.80 11.00,2.09 10.29,2.25 10.22,2.97 9.85,2.35"/><polygon points="11.01,4.14 11.66,3.82 11.56,3.10 12.07,3.62 12.72,3.30 12.38,3.95 12.88,4.47 12.17,4.34 11.83,4.99 11.73,4.27"/><polygon points="11.04,6.73 11.76,6.70 11.96,6.00 12.21,6.68 12.94,6.66 12.37,7.10 12.62,7.79 12.01,7.38 11.44,7.83 11.64,7.13"/><polygon points="9.22,8.38 9.90,8.63 10.35,8.06 10.32,8.79 11.00,9.05 10.30,9.24 10.26,9.96 9.87,9.36 9.16,9.55 9.62,8.98"/></g>', mark: `<polygon fill="#FFDE00" points="${STAR}"/>` },
+  JP: { name: 'ญี่ปุ่น', body: '<rect width="30" height="20" fill="#FFFFFF"/><circle cx="15" cy="10" r="6" fill="#BC002D"/>', mark: '<circle cx="5" cy="5" r="5" fill="#FFFFFF"/>' },
+  VN: { name: 'เวียดนาม', body: `<rect width="30" height="20" fill="#DA251D"/><polygon fill="#FFFF00" transform="translate(9.5 4.5) scale(1.1)" points="${STAR}"/>`, mark: `<polygon fill="#FFFF00" points="${STAR}"/>` },
+  SG: { name: 'สิงคโปร์', body: '<rect width="30" height="20" fill="#FFFFFF"/><rect width="30" height="10" fill="#EF3340"/><circle cx="6.5" cy="5" r="3.2" fill="#FFFFFF"/><circle cx="7.7" cy="5" r="3" fill="#EF3340"/>' },
+};
+// common airports, so a trip shows its country's flag without asking
+const AIRPORTS = {
+  CN: 'PEK PKX PVG SHA CAN SZX CTU TFU KMG XMN HGH NKG TAO DLC SHE CSX WUH XIY CKG HAK SYX TSN HRB KWE NNG KWL FOC TNA CGO',
+  JP: 'NRT HND KIX ITM NGO CTS FUK OKA KOJ HIJ SDJ',
+  VN: 'SGN HAN DAD CXR PQC HPH',
+  SG: 'SIN',
+};
+function countryOf(t) {
+  if (t.country) return FLAGS[t.country] ? t.country : '';
+  for (const c of t.cities || []) for (const [k, codes] of Object.entries(AIRPORTS)) if (c.code && codes.split(' ').includes(c.code)) return k;
+  return '';
+}
+function flag(code, w = 21) {
+  const f = FLAGS[code];
+  return f ? `<svg class="flag" width="${w}" height="${Math.round(w * 2 / 3)}" viewBox="0 0 30 20" role="img" aria-label="ธงชาติ${f.name}">${f.body}</svg>` : '';
+}
+/* the country's emblem, big and faint, in the corner of a coloured header */
+function flagMark(code) {
+  const f = FLAGS[code];
+  return f && f.mark ? `<svg class="flag-mark" viewBox="0 0 10 10" aria-hidden="true">${f.mark}</svg>` : '';
+}
+
 /* ---------- views ---------- */
+
+function nextFlight() {
+  const now = `${todayISO()} ${new Date().toTimeString().slice(0, 5)}`;
+  const all = data.trips.flatMap((t) => (t.flights || []).map((f) => ({ t, f })));
+  return all.filter(({ f }) => `${f.date} ${f.dep || '23:59'}` >= now).sort((a, b) => `${a.f.date} ${a.f.dep}`.localeCompare(`${b.f.date} ${b.f.dep}`))[0];
+}
 
 function viewHome() {
   const today = todayISO();
   const upcoming = data.trips.filter((t) => !t.end || t.end >= today).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
   const past = data.trips.filter((t) => t.end && t.end < today).sort((a, b) => b.start.localeCompare(a.start));
   const main = upcoming[0];
+  const nf = nextFlight();
+  const pack = main && (main.packing || []).length ? [...main.people, SHARED].map((p) => {
+    const l = main.packing.filter((x) => x.pid === p.id);
+    return l.length ? `${p.name} ${l.filter((x) => x.done).length}/${l.length}` : '';
+  }).filter(Boolean) : [];
+  const packPct = main && (main.packing || []).length ? Math.round(main.packing.filter((x) => x.done).length / main.packing.length * 100) : 0;
   return `<main class="screen">
     <header class="bar">
-      <div class="grow stack-s"><span class="eyebrow">Prem &amp; Fren</span><h1 class="title-xl">ทริปของเรา</h1></div>
+      <div class="grow stack-s"><span class="eyebrow">สวัสดี ${h(main?.travelers || 'Prem & Fren')}</span><h1 class="title-xl">ทริปของเรา</h1></div>
       <button class="icon-btn" data-act="backupMenu" aria-label="สำรอง / นำเข้าข้อมูล">${ic.more}</button>
       <button class="icon-btn dark" data-act="newTrip" aria-label="เพิ่มทริปใหม่">${ic.plus}</button>
     </header>
-    ${main ? `<section class="stack">
-      <h2 class="section-label">กำลังจะถึง</h2>
+    ${main ? `<section class="stack" style="gap:18px">
       ${tripCard(main)}
-      <div class="grid-3">
-        <a class="card quick" href="#/t/${main.id}/qr">${ic.qr}<span class="small bold">QR ตม.</span></a>
-        <a class="card quick" href="#/t/${main.id}/docs/flight">${ic.plane}<span class="small bold">ตั๋วเครื่องบิน</span></a>
-        <a class="card quick" href="#/t/${main.id}/docs/hotel">${ic.home}<span class="small bold">ที่พัก</span></a>
+      <div class="grid-4">
+        <a class="quick" href="#/t/${main.id}/qr"><span class="tint red">${ic.qr}</span>QR ตม.</a>
+        <a class="quick" href="#/t/${main.id}/docs/flight"><span class="tint blue">${ic.plane}</span>ตั๋ว</a>
+        <a class="quick" href="#/t/${main.id}/docs/hotel"><span class="tint green">${ic.home}</span>ที่พัก</a>
+        <a class="quick" href="#/t/${main.id}/money"><span class="tint orange">${ic.wallet}</span>ใช้จ่าย</a>
       </div>
     </section>` : ''}
-    <section class="stack">
-      <h2 class="section-label">ทริปถัดไป</h2>
+    ${nf ? `<section class="stack">
+      <div class="row between"><h2 class="h2">ถัดไป</h2><span class="small muted">${fmtD(nf.f.date)}</span></div>
+      ${passCard(nf.t, nf.f, true)}
+    </section>` : ''}
+    ${pack.length ? `<section class="stack">
+      <h2 class="h2">เตรียมของ</h2>
+      <a class="card pad-m stack" style="gap:10px" href="#/t/${main.id}/pack">
+        <span class="row between small"><span class="bold">${h(pack.slice(0, 2).join(' · '))}</span><span class="muted">${h(pack.slice(2).join(' · '))}</span></span>
+        <span class="progress"><span style="width:${packPct}%"></span></span>
+      </a>
+    </section>` : ''}
+    ${upcoming.length > 1 ? `<section class="stack">
+      <h2 class="h2">ทริปถัดไป</h2>
       ${upcoming.slice(1).map(tripCard).join('')}
-      <button class="empty-add" data-act="newTrip"><span class="plus">${ic.plus}</span>
-        <span class="stack-s"><span class="bold" style="color:var(--ink)">วางแผนทริปใหม่</span><span class="small">${upcoming.length > 1 ? 'เพิ่มอีกทริป' : 'ยังไม่มีทริปอื่น'}</span></span></button>
-    </section>
-    <section class="stack">
-      <h2 class="section-label">ทริปที่ผ่านมา</h2>
-      ${past.length ? past.map((t) => `<a class="card day-row" href="#/t/${t.id}"><span class="grow stack-s" style="flex:1"><span class="bold">${h(t.name)}</span><span class="small muted">${fmtRange(t.start, t.end)}</span></span>${ic.next}</a>`).join('')
-        : '<p class="small muted">ทริปที่จบแล้วจะย้ายมาเก็บไว้ที่นี่</p>'}
-    </section>
-    <p class="tiny muted" style="text-align:center">ข้อมูลทั้งหมดเก็บไว้ในเครื่องนี้ และใช้งานได้แม้ไม่มีอินเทอร์เน็ต</p>
+    </section>` : ''}
+    <button class="empty-add" data-act="newTrip"><span class="plus">${ic.plus}</span>
+      <span class="stack-s"><span class="bold" style="color:var(--ink)">วางแผนทริปใหม่</span><span class="small">${upcoming.length ? 'เพิ่มอีกทริป' : 'ยังไม่มีทริป'}</span></span></button>
+    ${past.length ? `<section class="stack">
+      <h2 class="h2">ทริปที่ผ่านมา</h2>
+      ${past.map((t) => `<a class="card day-row" href="#/t/${t.id}">${flag(countryOf(t), 24)}<span class="grow stack-s" style="flex:1"><span class="bold">${h(t.name)}</span><span class="small muted">${fmtRange(t.start, t.end)}</span></span>${ic.next}</a>`).join('')}
+    </section>` : ''}
+    <p class="tiny muted" style="text-align:center">${syncReady() ? `${syncLabel()} · ` : ''}ใช้ได้แม้ไม่มีอินเทอร์เน็ต</p>
   </main>`;
 }
 
 function tripCard(t) {
   const codes = (t.cities || []).map((c) => `<span>${h(c.code || c.name)}</span>`).join('<span class="dash"></span>');
-  return `<a class="card trip-card" href="#/t/${t.id}">
-    <div class="hero" style="background:${h(t.color)}">
-      <div class="row between"><span class="pill-glass">${countdown(t)}</span><span class="small">${tripDays(t).length} วัน · ${(t.cities || []).length} เมือง</span></div>
+  const cc = countryOf(t);
+  return `<a class="trip-card" href="#/t/${t.id}" style="--accent:${h(t.color)}">
+    ${flagMark(cc)}
+    <div class="hero">
+      <div class="row between"><span class="pill-glass">${countdown(t)}</span>${cc && cc !== 'TH' ? `<span class="flag-pair">${flag('TH')}${ic.arrow}${flag(cc)}</span>` : `<span class="small">${(t.cities || []).length} เมือง</span>`}</div>
       <div style="font-size:24px;font-weight:700;line-height:1.3">${h(t.name)}</div>
       ${codes ? `<div class="route">${codes}</div>` : ''}
     </div>
-    <div class="row between small muted" style="padding:14px 20px"><span>${fmtRange(t.start, t.end)}</span><span class="row bold" style="gap:4px;color:var(--ink)">เปิดทริป ${ic.next}</span></div>
+    <div class="perf"></div>
+    <div class="row between small" style="padding:12px 20px 16px"><span style="opacity:.9">${fmtRange(t.start, t.end)} · ${tripDays(t).length} วัน</span><span class="row bold" style="gap:4px">เปิดทริป ${ic.next}</span></div>
   </a>`;
 }
 
+/* a flight as a boarding pass; compact = home screen "next up" */
+function passCard(t, fl, compact) {
+  const cc = countryOf(t);
+  const flagAt = (code) => (code === 'BKK' || code === 'DMK' ? flag('TH', 20) : cc && AIRPORTS[cc]?.split(' ').includes(code) ? flag(cc, 20) : '');
+  const fromFlag = flagAt(fl.fromCode), toFlag = flagAt(fl.toCode);
+  return `<article class="card pass">
+    <div class="top">
+      <div class="row between tiny muted"><span>${compact ? '' : `${fmtD(fl.date)} · `}${h(fl.airline)}${compact ? ` · ${h(fl.flightNo)}` : ''}</span><span>${h(fl.duration)}</span></div>
+      <div class="codes">
+        <span class="stack-s"><span class="row" style="gap:7px">${fromFlag}<span class="code">${h(fl.fromCode)}</span></span><span class="bold">${h(fl.dep)}</span>${compact ? '' : `<span class="tiny muted">${h(fl.fromName)}</span>`}</span>
+        <span class="mid"><span class="ln"></span>${ic.plane}<span class="ln"></span></span>
+        <span class="stack-s" style="align-items:flex-end;text-align:right"><span class="row" style="gap:7px"><span class="code">${h(fl.toCode)}</span>${toFlag}</span><span class="bold">${h(fl.arr)}</span>${compact ? '' : `<span class="tiny muted">${h(fl.toName)}</span>`}</span>
+      </div>
+      ${!compact && fl.note ? `<div class="warn">${h(fl.note)}</div>` : ''}
+    </div>
+    <div class="bottom">
+      ${compact ? `<span class="muted">${h(fl.fromName)}</span><span class="muted" style="text-align:right">${h(fl.toName)}</span>`
+        : `<span class="muted">เที่ยวบิน <b style="color:var(--ink)">${h(fl.flightNo)}</b> · PNR ${fl.pnr ? `<button class="link-accent" style="padding:0" data-act="copy" data-text="${h(fl.pnr)}">${h(fl.pnr)}</button>` : '<span>—</span>'}</span>
+      <button class="link-accent" data-act="editFlight" data-id="${t.id}" data-fid="${fl.id}">แก้ไข</button>`}
+    </div>
+  </article>`;
+}
+
 function tripHead(t) {
+  const cc = countryOf(t);
   return `<header class="trip-head">
+    ${flagMark(cc)}
     <div class="row between">
       <a class="icon-btn glass" href="#/" aria-label="กลับหน้าแรก">${ic.back}</a>
       <span class="row" style="gap:8px">
@@ -493,10 +579,14 @@ function tripHead(t) {
         <button class="icon-btn glass" data-act="editTrip" data-id="${t.id}" aria-label="แก้ไขทริป">${ic.edit}</button>
       </span>
     </div>
-    <div class="stack-s"><h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span>${syncReady() ? `<span class="tiny">${syncLabel()}</span>` : ''}</div>
+    <div class="stack-s">
+      ${cc && cc !== 'TH' ? `<span class="country-chip">${flag(cc, 18)}ประเทศ${FLAGS[cc].name}</span>` : ''}
+      <h1 class="title-l" style="font-size:26px">${h(t.name)}</h1><span class="small" style="opacity:.92">${fmtRange(t.start, t.end)} · ${h(t.travelers)} · ${countdown(t)}</span>
+      ${syncReady() ? `<span class="tiny sync-line"><span class="dot ${syncState.ok === false ? 'bad' : ''}"></span>${syncLabel()}</span>` : ''}
+    </div>
     ${(t.cities || []).length ? `<div class="grid-3">${t.cities.map((c) => {
       const n = t.hotels.filter((x) => x.city === c.name).reduce((s, x) => s + nights(x), 0);
-      return `<div class="city-tile"><span class="code">${h(c.code || '—')}</span><span class="small">${h(c.name)}</span><span class="tiny">${n} คืน</span></div>`;
+      return `<div class="city-tile"><span class="code">${h(c.code || '—')}</span><span class="tiny">${h(c.name)} · ${n} คืน</span></div>`;
     }).join('')}</div>` : ''}
   </header>`;
 }
@@ -525,10 +615,10 @@ function viewTrip(t) {
       ${tabs(t, 'plan')}
       ${days.length ? '' : '<p class="muted">ใส่วันไป–วันกลับของทริปก่อน แล้วรายการวันจะขึ้นที่นี่</p>'}
       ${groups.map((g) => `<section class="stack">
-        <div class="row between"><h2 class="h2">${h(g.label)}</h2><span class="small muted">${fmtRange(g.days[0].d, g.days[g.days.length - 1].d)}</span></div>
+        <div class="row between"><h2 class="h2">${h(g.label)}</h2><span class="nights">${g.days.length > 1 ? fmtRange(g.days[0].d, g.days[g.days.length - 1].d) : fmtD(g.days[0].d, false)}</span></div>
         ${g.days.map(({ d, i, info }) => `<a class="card day-row" href="#/t/${t.id}/d/${d}">
-          <span class="day-badge"><span class="l">วันที่</span><span class="n">${i + 1}</span></span>
-          <span class="stack-s" style="flex:1;min-width:0"><span class="bold">${h(info.title)}</span><span class="small muted">${fmtD(d)} · ${info.count} รายการ</span></span>
+          <span class="day-badge ${d === todayISO() ? 'today' : ''}"><span class="l">${MON[parseD(d).getMonth()]}</span><span class="n">${parseD(d).getDate()}</span></span>
+          <span class="stack-s" style="flex:1;min-width:0"><span class="tiny muted">วันที่ ${i + 1} · ${DOW[parseD(d).getDay()]} · ${info.count} รายการ</span><span class="bold" style="font-size:15px">${h(info.title)}</span></span>
           ${info.warnings.length ? '<span class="dot-warn" title="มีเรื่องต้องเช็ค"></span>' : ''}${ic.next}
         </a>`).join('')}
       </section>`).join('')}
@@ -546,7 +636,7 @@ function viewDay(t, d) {
   return `<div class="screen flush" style="padding-top:calc(16px + var(--safe-top))">
     <header class="bar pad">
       <a class="icon-btn" href="#/t/${t.id}" aria-label="กลับไปภาพรวมทริป">${ic.back}</a>
-      <div class="grow stack-s"><span class="eyebrow">${h(info.city || '—')} · ${fmtD(d)}</span><h1 class="title-l">วันที่ ${idx + 1} · ${h(info.title)}</h1></div>
+      <div class="grow stack-s"><span class="eyebrow row" style="gap:6px">${flag(countryOf(t), 18)}${h(info.city || '—')} · ${fmtD(d)}</span><h1 class="title-l">วันที่ ${idx + 1} · ${h(info.title)}</h1></div>
       <button class="icon-btn" data-act="editDayTitle" data-id="${t.id}" data-date="${d}" aria-label="ตั้งชื่อวันนี้">${ic.edit}</button>
     </header>
     <nav class="pills" aria-label="เลือกวัน">
@@ -555,7 +645,7 @@ function viewDay(t, d) {
     <div class="pad stack">
       ${info.warnings.map((w) => `<div class="warn">${h(w)}</div>`).join('')}
       ${s ? `<div class="card pad-s row">
-        <span style="color:var(--ink)">${ic.home}</span>
+        <span class="tint green sm">${ic.home}</span>
         <span class="stack-s" style="flex:1;min-width:0"><span class="tiny muted">คืนนี้พักที่</span><span class="bold" style="font-size:14px">${h(s.name)}</span></span>
         <a class="link-accent" href="#/t/${t.id}/taxi/${s.id}">โชว์ที่อยู่</a>
       </div>` : ''}
@@ -568,20 +658,24 @@ function viewDay(t, d) {
   </div>`;
 }
 
+const ACT_TINT = { 'กิน': ['orange', 'food'], 'เดินทาง': ['blue', 'car'], 'ช้อปปิ้ง': ['purple', 'bag'], 'เที่ยว': ['red', 'pin'] };
+
 function timelineItem(t, it) {
-  let kind, title, note, actions = '', accent = false;
+  let kind, title, note, body = '', actions = '', accent = false, tint = ['gray', 'pin'];
   if (it.kind === 'flight') {
-    const f = it.f; accent = true;
-    kind = 'เที่ยวบิน'; title = `${f.flightNo} ${f.fromCode} → ${f.toCode}`;
-    note = `${f.dep}–${f.arr}${f.duration ? ` (${f.duration})` : ''} · ${f.fromName} → ${f.toName}`;
+    const f = it.f; accent = true; tint = ['blue', 'plane'];
+    kind = `${f.airline || 'เที่ยวบิน'} · ${f.flightNo}`; title = '';
+    body = `<div class="codes mini"><span class="stack-s"><span class="code">${h(f.fromCode)}</span><span class="bold small">${h(f.dep)}</span></span>
+      <span class="mid"><span class="ln"></span>${ic.plane}<span class="ln"></span></span>
+      <span class="stack-s" style="align-items:flex-end"><span class="code">${h(f.toCode)}</span><span class="bold small">${h(f.arr)}</span></span></div>`;
+    note = [f.duration, f.note].filter(Boolean).join('\n');
     actions = `<a class="btn" href="#/t/${t.id}/docs/flight">ดูตั๋ว</a>${it.first ? `<a class="btn" href="#/t/${t.id}/qr">QR ตม.</a>` : ''}`;
-    if (f.note) note += `\n${f.note}`;
   } else if (it.kind === 'in' || it.kind === 'out') {
-    const x = it.x;
-    kind = it.kind === 'in' ? 'เช็คอิน' : 'เช็คเอาท์'; title = x.name; note = x.nameZh;
-    actions = `<a class="btn" href="${amap(x.nameZh || x.name)}" target="_blank" rel="noopener">${ic.pin} แผนที่</a><a class="btn" href="#/t/${t.id}/taxi/${x.id}">${ic.car} โชว์ที่อยู่</a>`;
+    const x = it.x; tint = ['green', 'home'];
+    kind = it.kind === 'in' ? `เช็คอิน${nights(x) ? ` · ${nights(x)} คืน` : ''}` : 'เช็คเอาท์'; title = x.name; note = x.nameZh;
+    actions = `<a class="btn" href="${amap(x.nameZh || x.name)}" target="_blank" rel="noopener">${ic.pin} แผนที่</a><a class="btn dark" href="#/t/${t.id}/taxi/${x.id}">${ic.car} โชว์ที่อยู่</a>`;
   } else {
-    const a = it.a;
+    const a = it.a; tint = ACT_TINT[a.type] || tint;
     kind = a.type || 'กิจกรรม'; title = a.title; note = [a.place, a.note].filter(Boolean).join('\n');
     actions = `${a.place ? `<a class="btn" href="${amap(a.place)}" target="_blank" rel="noopener">${ic.pin} แผนที่</a>` : ''}<button class="btn" data-act="editAct" data-id="${t.id}" data-aid="${a.id}">${ic.edit} แก้ไข</button>`;
   }
@@ -589,9 +683,11 @@ function timelineItem(t, it) {
     <div class="tl-time">${h(it.time || '')}</div>
     <div class="tl-rail"><span class="dot ${accent ? 'accent' : ''}"></span><span class="line"></span></div>
     <div class="card tl-card">
-      <span class="chip">${h(kind)}</span>
-      <span class="bold">${h(title)}</span>
-      ${note ? `<span class="small muted" style="white-space:pre-line">${h(note)}</span>` : ''}
+      <div class="row" style="gap:12px;align-items:flex-start">
+        <span class="tint ${tint[0]} sm">${ic[tint[1]]}</span>
+        <span class="stack-s" style="flex:1;min-width:0;gap:2px"><span class="tiny muted">${h(kind)}</span>${title ? `<span class="bold" style="font-size:15px">${h(title)}</span>` : ''}${note ? `<span class="small muted" style="white-space:pre-line">${h(note)}</span>` : ''}</span>
+      </div>
+      ${body}
       <div class="tl-actions">${actions}</div>
     </div>
   </li>`;
@@ -619,21 +715,7 @@ function viewDocs(t, filter) {
 
       ${show('flight') ? `<section class="stack">
         <div class="row between"><h2 class="h2">ตั๋วเครื่องบิน</h2><button class="link-accent" data-act="addFlight" data-id="${t.id}">+ เพิ่มเที่ยวบิน</button></div>
-        ${[...t.flights].sort(byTime).map((fl) => `<article class="card pass">
-          <div class="top">
-            <div class="row between tiny muted"><span>${fmtD(fl.date)} · ${h(fl.airline)}</span><span>${h(fl.duration)}</span></div>
-            <div class="codes">
-              <span class="stack-s"><span class="code">${h(fl.fromCode)}</span><span class="bold">${h(fl.dep)}</span><span class="tiny muted">${h(fl.fromName)}</span></span>
-              <span class="mid"><span class="ln"></span>${ic.plane}<span class="ln"></span></span>
-              <span class="stack-s" style="align-items:flex-end;text-align:right"><span class="code">${h(fl.toCode)}</span><span class="bold">${h(fl.arr)}</span><span class="tiny muted">${h(fl.toName)}</span></span>
-            </div>
-            ${fl.note ? `<div class="warn">${h(fl.note)}</div>` : ''}
-          </div>
-          <div class="bottom">
-            <span class="muted">เที่ยวบิน <b style="color:var(--ink)">${h(fl.flightNo)}</b> · PNR ${fl.pnr ? `<button class="link-accent" style="padding:0" data-act="copy" data-text="${h(fl.pnr)}">${h(fl.pnr)}</button>` : '<span>—</span>'}</span>
-            <button class="link-accent" data-act="editFlight" data-id="${t.id}" data-fid="${fl.id}">แก้ไข</button>
-          </div>
-        </article>`).join('') || '<p class="muted small">ยังไม่มีเที่ยวบิน</p>'}
+        ${[...t.flights].sort(byTime).map((fl) => passCard(t, fl)).join('') || '<p class="muted small">ยังไม่มีเที่ยวบิน</p>'}
       </section>` : ''}
 
       ${show('hotel') ? `<section class="stack">
@@ -714,6 +796,7 @@ function viewPack(t, pid) {
 
 const EXP_CATS = ['อาหาร', 'เดินทาง', 'ที่พัก', 'เที่ยว', 'ช้อปปิ้ง', 'อื่น ๆ'];
 const TRANSFER = 'โอนคืน';
+const EXP_TINT = { 'อาหาร': ['orange', 'food'], 'เดินทาง': ['blue', 'car'], 'ที่พัก': ['green', 'home'], 'เที่ยว': ['red', 'pin'], 'ช้อปปิ้ง': ['purple', 'bag'], 'อื่น ๆ': ['gray', 'wallet'], 'โอนคืน': ['gray', 'arrow'] };
 const DEFAULT_RATE = 4.5;  // baht per yuan, editable per trip
 const rateOf = (t) => Number(t.rate) || DEFAULT_RATE;
 const toTHB = (t, e) => (Number(e.amount) || 0) * (e.currency === 'THB' ? 1 : rateOf(t));
@@ -763,18 +846,17 @@ function viewMoney(t) {
     ${tripHead(t)}
     <div class="pad stack" style="gap:20px">
       ${tabs(t, 'money')}
-      <section class="card pad-m stack" style="gap:12px">
-        <div class="row between"><span class="small muted">ใช้ไปทั้งหมด</span><button class="link-accent" style="padding:0" data-act="editRate" data-id="${t.id}">¥1 = ฿${rateOf(t)} · แก้เรท</button></div>
-        <div class="stack-s"><span style="font-size:30px;font-weight:700;line-height:1.1">${baht(total)}</span><span class="small muted">≈ ${yuan(total / rateOf(t))}</span></div>
-        <div class="grid-2">${t.people.map((p) => `<div class="mini-stat"><span class="tiny muted">ส่วนของ ${h(p.name)}</span><span class="bold">${baht(share[p.id] || 0)}</span></div>`).join('')}</div>
+      <section class="sum-card stack" style="gap:16px">
+        <div class="row between"><span class="small" style="color:#B7C0CA">ใช้ไปทั้งหมด</span><button class="rate-pill" data-act="editRate" data-id="${t.id}" aria-label="แก้อัตราแลกเปลี่ยน">${flag(countryOf(t) === 'CN' ? 'CN' : '', 18)}¥1 = ${flag('TH', 18)}฿${rateOf(t)}</button></div>
+        <div class="stack-s" style="gap:2px"><span style="font-size:34px;font-weight:700;line-height:1.15">${baht(total)}</span><span class="mono small" style="color:#B7C0CA">≈ ${yuan(total / rateOf(t))}</span></div>
+        <div class="grid-2">${t.people.map((p) => `<div class="mini-stat"><span class="tiny">ส่วนของ ${h(p.name)}</span><span class="bold">${baht(share[p.id] || 0)}</span></div>`).join('')}</div>
       </section>
 
-      ${list.length ? `<section class="card pad-m stack" style="gap:10px">
-        <h2 class="h2">เคลียร์เงิน</h2>
-        ${settle.length ? settle.map((x) => `<div class="row between wrap"><span><b>${h(personName(t, x.from))}</b> ต้องโอนให้ <b>${h(personName(t, x.to))}</b></span><span class="bold" style="font-size:18px">${baht(x.amt)}</span></div>
-          <button class="btn block" data-act="settleUp" data-id="${t.id}" data-from="${x.from}" data-to="${x.to}" data-amt="${Math.round(x.amt)}">บันทึกว่าโอนแล้ว</button>`).join('')
-          : '<p class="small muted">ไม่มีใครค้างใคร</p>'}
-      </section>` : ''}
+      ${list.length ? (settle.length ? settle.map((x) => `<section class="card pad-m row" style="gap:12px">
+          <span class="avatars"><span class="av blue">${h(personName(t, x.from).slice(0, 1))}</span><span class="av red">${h(personName(t, x.to).slice(0, 1))}</span></span>
+          <span class="stack-s" style="flex:1;min-width:0;gap:0"><span class="small muted">${h(personName(t, x.from))} โอนให้ ${h(personName(t, x.to))}</span><span class="bold" style="font-size:18px">${baht(x.amt)}</span></span>
+          <button class="btn accent" data-act="settleUp" data-id="${t.id}" data-from="${x.from}" data-to="${x.to}" data-amt="${Math.round(x.amt)}">โอนแล้ว</button>
+        </section>`).join('') : '<p class="small muted" style="text-align:center">เคลียร์ครบแล้ว ไม่มีใครค้างใคร</p>') : ''}
 
       <button class="btn primary block" data-act="addExpense" data-id="${t.id}">+ เพิ่มค่าใช้จ่าย</button>
 
@@ -792,8 +874,9 @@ function viewMoney(t) {
         return `<section class="stack">
           <div class="row between"><h2 class="h2">${d ? fmtD(d) : 'ก่อนเดินทาง'}</h2><span class="small muted">${baht(dayTotal)}</span></div>
           <div class="card">${items.map((e) => `<button class="kv expense" data-act="editExpense" data-id="${t.id}" data-eid="${e.id}">
-            <span class="stack-s" style="min-width:0"><span class="bold">${h(e.title)}</span><span class="tiny muted">${h(e.category || 'อื่น ๆ')} · ${h(personName(t, e.paidBy))} จ่าย${e.category === TRANSFER ? ` ให้ ${h(personName(t, e.split))}` : e.split === 'all' ? ' · หารกัน' : ` · ของ ${h(personName(t, e.split))}`}</span></span>
-            <span class="stack-s" style="align-items:flex-end;flex-shrink:0"><span class="bold" style="color:var(--ink)">${e.currency === 'THB' ? baht(e.amount) : yuan(Number(e.amount) || 0)}</span>${e.currency === 'THB' ? '' : `<span class="tiny">≈ ${baht(toTHB(t, e))}</span>`}</span>
+            <span class="tint ${(EXP_TINT[e.category] || EXP_TINT['อื่น ๆ'])[0]} sm">${ic[(EXP_TINT[e.category] || EXP_TINT['อื่น ๆ'])[1]]}</span>
+            <span class="stack-s" style="min-width:0;flex:1"><span class="bold">${h(e.title)}</span><span class="tiny muted">${h(e.category || 'อื่น ๆ')} · ${h(personName(t, e.paidBy))} จ่าย${e.category === TRANSFER ? ` ให้ ${h(personName(t, e.split))}` : e.split === 'all' ? ' · หารกัน' : ` · ของ ${h(personName(t, e.split))}`}</span></span>
+            <span class="stack-s" style="align-items:flex-end;flex-shrink:0"><span class="bold mono" style="color:var(--ink)">${e.currency === 'THB' ? baht(e.amount) : yuan(Number(e.amount) || 0)}</span>${e.currency === 'THB' ? '' : `<span class="tiny">≈ ${baht(toTHB(t, e))}</span>`}</span>
           </button>`).join('')}</div>
         </section>`;
       }).join('') || '<p class="muted small" style="text-align:center">ยังไม่มีรายการ กดเพิ่มค่าใช้จ่ายได้เลย</p>'}
@@ -946,6 +1029,7 @@ const TRIP_FIELDS = [
   { k: 'end', l: 'วันกลับ', t: 'date', half: true, req: true },
   { k: 'citiesText', l: 'เมือง (เรียงตามลำดับ คั่นด้วย ,  ใส่รหัสสนามบินในวงเล็บได้)', ph: 'โตเกียว (NRT), โอซาก้า (KIX)' },
   { k: 'travelers', l: 'ผู้ร่วมเดินทาง', ph: 'Prem & Fren' },
+  { k: 'country', l: 'ประเทศ (ธงประจำทริป)', t: 'select', options: [['', 'เดาจากรหัสสนามบิน'], ...Object.entries(FLAGS).map(([k, f]) => [k, f.name]), ['-', 'ไม่แสดงธง']] },
   { k: 'color', l: 'สีประจำทริป', t: 'color' },
 ];
 const FLIGHT_FIELDS = [
@@ -1027,7 +1111,7 @@ const actions = {
       title: 'ทริปใหม่', fields: TRIP_FIELDS, values: { travelers: 'Prem & Fren', color: COLORS[1][0] }, submit: 'สร้างทริป',
       onSave: async (v) => {
         if (v.end < v.start) [v.start, v.end] = [v.end, v.start];
-        const t = { id: uid(), name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, cities: parseCities(v.citiesText),
+        const t = { id: uid(), name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, country: v.country, cities: parseCities(v.citiesText),
           flights: [], hotels: [], activities: [], notes: [], dayTitles: {},
           people: [{ id: uid(), name: 'Prem', passportName: '', passportNo: '', passportExp: '', qr: '' }, { id: uid(), name: 'Fren', passportName: '', passportNo: '', passportExp: '', qr: '' }] };
         data.trips.push(t); await save(t); location.hash = `#/t/${t.id}`;
@@ -1040,7 +1124,7 @@ const actions = {
       title: 'แก้ไขทริป', fields: TRIP_FIELDS, values: { ...t, citiesText: citiesText(t) },
       onSave: async (v) => {
         if (v.end < v.start) [v.start, v.end] = [v.end, v.start];
-        Object.assign(t, { name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, cities: parseCities(v.citiesText) });
+        Object.assign(t, { name: v.name, start: v.start, end: v.end, travelers: v.travelers, color: v.color, country: v.country, cities: parseCities(v.citiesText) });
         await save(t); render();
       },
       onDelete: async () => { data.trips = data.trips.filter((x) => x !== t); await save(); location.hash = '#/'; },
