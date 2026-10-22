@@ -1,10 +1,10 @@
 // Offline-first: the app shell is cached on install, so the app opens in China
 // even when GitHub Pages or Google Fonts can't be reached.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const SHELL = ['./', 'index.html', 'style.css', 'config.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -22,7 +22,8 @@ self.addEventListener('fetch', (e) => {
   // Network first for our own files (picks up updates), cache as fallback; fonts cache first.
   if (sameOrigin) {
     e.respondWith(
-      fetch(req).then((res) => {
+      // no-cache: revalidate with GitHub Pages every time (a cheap 304), so a new version shows on the next open
+      fetch(req, { cache: 'no-cache' }).then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
         return res;
       }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('index.html')))

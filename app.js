@@ -1345,5 +1345,16 @@ window.addEventListener('hashchange', render);
   setInterval(() => { if (document.visibilityState === 'visible') syncAll(); }, 15000);
   window.addEventListener('online', syncAll);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncAll(); });
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    // a new version takes over in the background: reload once so the screen shows it
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded || document.querySelector('dialog[open]')) return;
+      reloaded = true; location.reload();
+    });
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((r) => {
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') r.update().catch(() => {}); });
+    }).catch(() => {});
+  }
 })();
