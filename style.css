@@ -117,7 +117,7 @@ h1, h2, h3, p { margin: 0; }
 .city-tile .code { font-size: 18px; font-weight: 700; letter-spacing: .04em; }
 
 .tabs { display: flex; gap: 6px; padding: 4px; background: #E3E7EC; border-radius: 14px; }
-.tabs a { flex: 1 1 0; text-align: center; padding: 10px 8px; border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--ink-2); }
+.tabs a { flex: 1 1 0; text-align: center; padding: 10px 4px; border-radius: 10px; font-size: 13.5px; white-space: nowrap; font-weight: 500; color: var(--ink-2); }
 .tabs a[aria-current="page"] { background: #fff; color: var(--ink); font-weight: 600; }
 
 .day-row { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
@@ -234,3 +234,7 @@ dialog.sheet::backdrop { background: rgba(20,32,43,.45); }
 .check[aria-pressed="true"] .box { background: var(--accent); border-color: var(--accent); }
 .check[aria-pressed="true"] .grow { color: var(--muted); text-decoration: line-through; }
 .icon-btn.plain { border-color: transparent; background: none; color: var(--muted); }
+
+/* expenses */
+.mini-stat { display: flex; flex-direction: column; gap: 2px; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+.kv.expense { width: 100%; background: none; border-left: 0; border-right: 0; border-top: 0; text-align: left; align-items: center; }

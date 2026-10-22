@@ -504,8 +504,9 @@ function tripHead(t) {
 function tabs(t, active) {
   return `<nav class="tabs" aria-label="ส่วนของทริป">
     <a href="#/t/${t.id}" ${active === 'plan' ? 'aria-current="page"' : ''}>แผนรายวัน</a>
-    <a href="#/t/${t.id}/docs" ${active === 'docs' ? 'aria-current="page"' : ''}>ข้อมูลสำคัญ</a>
+    <a href="#/t/${t.id}/docs" ${active === 'docs' ? 'aria-current="page"' : ''}>ข้อมูล</a>
     <a href="#/t/${t.id}/pack" ${active === 'pack' ? 'aria-current="page"' : ''}>เช็คลิสต์</a>
+    <a href="#/t/${t.id}/money" ${active === 'money' ? 'aria-current="page"' : ''}>ค่าใช้จ่าย</a>
   </nav>`;
 }
 
@@ -709,6 +710,110 @@ function viewPack(t, pid) {
   </div>`;
 }
 
+/* ---------- expenses: everything is converted to baht with the trip's own rate ---------- */
+
+const EXP_CATS = ['อาหาร', 'เดินทาง', 'ที่พัก', 'เที่ยว', 'ช้อปปิ้ง', 'อื่น ๆ'];
+const TRANSFER = 'โอนคืน';
+const DEFAULT_RATE = 4.5;  // baht per yuan, editable per trip
+const rateOf = (t) => Number(t.rate) || DEFAULT_RATE;
+const toTHB = (t, e) => (Number(e.amount) || 0) * (e.currency === 'THB' ? 1 : rateOf(t));
+const baht = (n) => `฿${Math.round(n).toLocaleString('th-TH')}`;
+const yuan = (n) => `¥${(Math.round(n * 100) / 100).toLocaleString('th-TH')}`;
+const personName = (t, pid) => (t.people.find((p) => p.id === pid) || {}).name || '?';
+
+/* split 'all' shares equally; a person id means it was only for them (a transfer is "paid for" the receiver) */
+function balances(t) {
+  const net = Object.fromEntries(t.people.map((p) => [p.id, 0]));
+  for (const e of t.expenses || []) {
+    const v = toTHB(t, e);
+    if (e.paidBy in net) net[e.paidBy] += v;
+    const owers = e.split === 'all' ? t.people.map((p) => p.id) : [e.split];
+    for (const pid of owers) if (pid in net) net[pid] -= v / owers.length;
+  }
+  return net;
+}
+function settlements(t) {
+  const net = balances(t);
+  const pos = Object.entries(net).filter(([, v]) => v > 0.5).sort((a, b) => b[1] - a[1]);
+  const neg = Object.entries(net).filter(([, v]) => v < -0.5).sort((a, b) => a[1] - b[1]);
+  const out = [];
+  for (const n of neg) {
+    for (const p of pos) {
+      const amt = Math.min(-n[1], p[1]);
+      if (amt < 0.5) continue;
+      out.push({ from: n[0], to: p[0], amt }); n[1] += amt; p[1] -= amt;
+    }
+  }
+  return out;
+}
+
+function viewMoney(t) {
+  const list = t.expenses || [];
+  const spend = list.filter((e) => e.category !== TRANSFER);
+  const total = spend.reduce((s, e) => s + toTHB(t, e), 0);
+  const byCat = EXP_CATS.map((c) => [c, spend.filter((e) => (e.category || 'อื่น ๆ') === c).reduce((s, e) => s + toTHB(t, e), 0)]).filter(([, v]) => v > 0);
+  const share = Object.fromEntries(t.people.map((p) => [p.id, 0]));
+  for (const e of spend) {
+    const owers = e.split === 'all' ? t.people.map((p) => p.id) : [e.split];
+    for (const pid of owers) if (pid in share) share[pid] += toTHB(t, e) / owers.length;
+  }
+  const settle = settlements(t);
+  const dates = [...new Set(list.map((e) => e.date || ''))].sort().reverse();
+  return `<div class="screen flush">
+    ${tripHead(t)}
+    <div class="pad stack" style="gap:20px">
+      ${tabs(t, 'money')}
+      <section class="card pad-m stack" style="gap:12px">
+        <div class="row between"><span class="small muted">ใช้ไปทั้งหมด</span><button class="link-accent" style="padding:0" data-act="editRate" data-id="${t.id}">¥1 = ฿${rateOf(t)} · แก้เรท</button></div>
+        <div class="stack-s"><span style="font-size:30px;font-weight:700;line-height:1.1">${baht(total)}</span><span class="small muted">≈ ${yuan(total / rateOf(t))}</span></div>
+        <div class="grid-2">${t.people.map((p) => `<div class="mini-stat"><span class="tiny muted">ส่วนของ ${h(p.name)}</span><span class="bold">${baht(share[p.id] || 0)}</span></div>`).join('')}</div>
+      </section>
+
+      ${list.length ? `<section class="card pad-m stack" style="gap:10px">
+        <h2 class="h2">เคลียร์เงิน</h2>
+        ${settle.length ? settle.map((x) => `<div class="row between wrap"><span><b>${h(personName(t, x.from))}</b> ต้องโอนให้ <b>${h(personName(t, x.to))}</b></span><span class="bold" style="font-size:18px">${baht(x.amt)}</span></div>
+          <button class="btn block" data-act="settleUp" data-id="${t.id}" data-from="${x.from}" data-to="${x.to}" data-amt="${Math.round(x.amt)}">บันทึกว่าโอนแล้ว</button>`).join('')
+          : '<p class="small muted">ไม่มีใครค้างใคร</p>'}
+      </section>` : ''}
+
+      <button class="btn primary block" data-act="addExpense" data-id="${t.id}">+ เพิ่มค่าใช้จ่าย</button>
+
+      ${byCat.length ? `<section class="stack">
+        <h2 class="h2">แยกตามหมวด</h2>
+        <div class="card pad-m stack" style="gap:10px">${byCat.sort((a, b) => b[1] - a[1]).map(([c, v]) => `<div class="stack-s">
+          <div class="row between small"><span>${h(c)}</span><span class="bold">${baht(v)}</span></div>
+          <div class="progress"><span style="width:${(v / total) * 100}%"></span></div>
+        </div>`).join('')}</div>
+      </section>` : ''}
+
+      ${dates.map((d) => {
+        const items = list.filter((e) => (e.date || '') === d);
+        const dayTotal = items.filter((e) => e.category !== TRANSFER).reduce((s, e) => s + toTHB(t, e), 0);
+        return `<section class="stack">
+          <div class="row between"><h2 class="h2">${d ? fmtD(d) : 'ก่อนเดินทาง'}</h2><span class="small muted">${baht(dayTotal)}</span></div>
+          <div class="card">${items.map((e) => `<button class="kv expense" data-act="editExpense" data-id="${t.id}" data-eid="${e.id}">
+            <span class="stack-s" style="min-width:0"><span class="bold">${h(e.title)}</span><span class="tiny muted">${h(e.category || 'อื่น ๆ')} · ${h(personName(t, e.paidBy))} จ่าย${e.category === TRANSFER ? ` ให้ ${h(personName(t, e.split))}` : e.split === 'all' ? ' · หารกัน' : ` · ของ ${h(personName(t, e.split))}`}</span></span>
+            <span class="stack-s" style="align-items:flex-end;flex-shrink:0"><span class="bold" style="color:var(--ink)">${e.currency === 'THB' ? baht(e.amount) : yuan(Number(e.amount) || 0)}</span>${e.currency === 'THB' ? '' : `<span class="tiny">≈ ${baht(toTHB(t, e))}</span>`}</span>
+          </button>`).join('')}</div>
+        </section>`;
+      }).join('') || '<p class="muted small" style="text-align:center">ยังไม่มีรายการ กดเพิ่มค่าใช้จ่ายได้เลย</p>'}
+    </div>
+  </div>`;
+}
+
+function expenseFields(t) {
+  const days = tripDays(t);
+  return [
+    { k: 'title', l: 'จ่ายค่าอะไร', req: true, ph: 'เช่น ข้าวเย็น ติ่มซำ' },
+    { k: 'amount', l: 'จำนวนเงิน', t: 'number', half: true, req: true, ph: '0' },
+    { k: 'currency', l: 'สกุลเงิน', t: 'select', half: true, options: [['CNY', 'หยวน ¥'], ['THB', 'บาท ฿']] },
+    { k: 'paidBy', l: 'ใครจ่าย', t: 'select', half: true, options: t.people.map((p) => [p.id, p.name]) },
+    { k: 'split', l: 'ของใคร', t: 'select', half: true, options: [['all', 'หารเท่ากัน'], ...t.people.map((p) => [p.id, `ของ ${p.name} คนเดียว`])] },
+    { k: 'category', l: 'หมวด', t: 'select', half: true, options: [...EXP_CATS, TRANSFER].map((x) => [x, x]) },
+    { k: 'date', l: 'วัน', t: 'select', half: true, options: [['', 'ก่อนเดินทาง'], ...days.map((d, i) => [d, `วันที่ ${i + 1} · ${fmtD(d, false)}`])] },
+  ];
+}
+
 function viewQR(t, pid) {
   const p = t.people.find((x) => x.id === pid) || t.people[0];
   if (!p) return viewDocs(t, 'qr');
@@ -765,7 +870,7 @@ function fieldHTML(f, v) {
       ${v ? `<img src="${v}" alt="" style="width:120px;border-radius:8px;border:1px solid var(--line)"><label class="row small"><input type="checkbox" name="${f.k}__remove" style="width:20px;min-height:20px"> ลบรูปเดิม</label>` : ''}
       <input id="${id}" type="file" name="${f.k}" accept="image/*"></div>`;
   }
-  return `<div class="${cls}"><label for="${id}">${h(f.l)}${f.req ? ' *' : ''}</label><input id="${id}" name="${f.k}" type="${f.t || 'text'}" value="${h(v)}"${ph}${f.t === 'text' || !f.t ? ' autocomplete="off"' : ''}></div>`;
+  return `<div class="${cls}"><label for="${id}">${h(f.l)}${f.req ? ' *' : ''}</label><input id="${id}" name="${f.k}" type="${f.t || 'text'}" value="${h(v)}"${ph}${f.t === 'number' ? ' inputmode="decimal" step="any" min="0"' : ''}${f.t === 'text' || !f.t ? ' autocomplete="off"' : ''}></div>`;
 }
 
 function openSheet({ title, fields, values = {}, submit = 'บันทึก', onSave, onDelete }) {
@@ -976,6 +1081,43 @@ const actions = {
     (pid === SHARED.id ? SHARED_STARTER : PACK_STARTER).forEach((text, i) => { if (!list.some((x) => x.id === `${pid}-s${i}`)) list.push({ id: `${pid}-s${i}`, pid, text, done: false }); });
     await save(t); render();
   },
+  addExpense({ id }) {
+    const t = trip(id);
+    if (!t.people.length) { toast('เพิ่มผู้เดินทางก่อน'); return; }
+    const today = todayISO();
+    const last = (t.expenses || [])[t.expenses?.length - 1];
+    openSheet({
+      title: 'เพิ่มค่าใช้จ่าย', fields: expenseFields(t),
+      values: { currency: last?.currency || 'CNY', paidBy: last?.paidBy || t.people[0].id, split: 'all', category: 'อาหาร', date: tripDays(t).includes(today) ? today : '' },
+      onSave: async (v) => {
+        v.amount = Number(v.amount);
+        if (!(v.amount > 0)) { toast('ใส่จำนวนเงินให้ถูกต้อง'); return; }
+        (t.expenses ||= []).push({ id: uid(), ...v }); await save(t); render();
+      },
+    });
+  },
+  editExpense({ id, eid }) {
+    const t = trip(id); const e = (t.expenses || []).find((x) => x.id === eid);
+    if (!e) return;
+    openSheet({
+      title: 'แก้ไขค่าใช้จ่าย', fields: expenseFields(t), values: e,
+      onSave: async (v) => { v.amount = Number(v.amount); if (!(v.amount > 0)) { toast('ใส่จำนวนเงินให้ถูกต้อง'); return; } Object.assign(e, v); await save(t); render(); },
+      onDelete: async () => { t.expenses = t.expenses.filter((x) => x !== e); await save(t); render(); },
+    });
+  },
+  editRate({ id }) {
+    const t = trip(id);
+    openSheet({
+      title: 'อัตราแลกเปลี่ยน', fields: [{ k: 'rate', l: '1 หยวน = กี่บาท (ดูเรทที่แลกจริง)', t: 'number', req: true }], values: { rate: rateOf(t) },
+      onSave: async (v) => { const r = Number(v.rate); if (!(r > 0)) { toast('ใส่เรทให้ถูกต้อง'); return; } t.rate = r; await save(t); render(); },
+    });
+  },
+  async settleUp({ id, from, to, amt }) {
+    const t = trip(id);
+    if (!confirm(`${personName(t, from)} โอนให้ ${personName(t, to)} ${baht(+amt)} แล้ว?`)) return;
+    (t.expenses ||= []).push({ id: uid(), title: 'โอนเคลียร์', amount: +amt, currency: 'THB', paidBy: from, split: to, category: TRANSFER, date: tripDays(t).includes(todayISO()) ? todayISO() : '' });
+    await save(t); render(); toast('บันทึกแล้ว');
+  },
   goQR({ id, pid }) { location.replace(`#/t/${id}/qr/${pid}`); },
   back() { history.length > 1 ? history.back() : (location.hash = '#/'); },
   async copy({ text }) {
@@ -1087,6 +1229,7 @@ function render() {
     else if (view === 'qr') html = viewQR(t, parts[3]);
     else if (view === 'taxi') html = viewTaxi(t, parts[3]);
     else if (view === 'pack') html = viewPack(t, parts[3]);
+    else if (view === 'money') html = viewMoney(t);
     else html = viewTrip(t);
   }
   $app.innerHTML = html;
