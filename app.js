@@ -436,6 +436,7 @@ const ic = {
   food: svg('<path d="M4 11h16a8 8 0 0 1-16 0z"/><path d="M8 7c0-1 1-2 1-3M12 7c0-1 1-2 1-3M16 7c0-1 1-2 1-3"/>', 1.8),
   bag: svg('<path d="M6 7h12l1 13H5z"/><path d="M9 7a3 3 0 0 1 6 0"/>', 1.8),
   arrow: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+  talk: svg('<path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 20.5l1.4-5.2A8.5 8.5 0 1 1 21 11.5z"/><path d="M8.5 10h7M8.5 13.5h4.5"/>', 1.8),
   car: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/>', 1.8),
 };
 
@@ -498,11 +499,12 @@ function viewHome() {
     </header>
     ${main ? `<section class="stack" style="gap:18px">
       ${tripCard(main)}
-      <div class="grid-4">
+      <div class="grid-5">
         <a class="quick" href="#/t/${main.id}/qr"><span class="tint red">${ic.qr}</span>QR ตม.</a>
         <a class="quick" href="#/t/${main.id}/docs/flight"><span class="tint blue">${ic.plane}</span>ตั๋ว</a>
         <a class="quick" href="#/t/${main.id}/docs/hotel"><span class="tint green">${ic.home}</span>ที่พัก</a>
         <a class="quick" href="#/t/${main.id}/money"><span class="tint orange">${ic.wallet}</span>ใช้จ่าย</a>
+        <a class="quick" href="#/phrases"><span class="tint purple">${ic.talk}</span>ภาษาจีน</a>
       </div>
     </section>` : ''}
     ${nf ? `<section class="stack">
@@ -932,6 +934,144 @@ function viewTaxi(t, hid) {
   </div></main>`;
 }
 
+/* ---------- Chinese phrasebook: static, works offline ---------- */
+
+const PHRASES = [
+  { id: 'basic', title: 'คำพื้นฐาน', items: [
+    ['你好', 'หนี ห่าว', 'สวัสดี'],
+    ['谢谢', 'เซี่ย เซี่ย', 'ขอบคุณ'],
+    ['不客气', 'ปู๋ เค่อ ชี่', 'ไม่เป็นไร (ตอบขอบคุณ)'],
+    ['不好意思', 'ปู้ ห่าว อี้ ซือ', 'ขอโทษนะ / ขอรบกวน'],
+    ['对不起', 'ตุ้ย ปู้ ฉี่', 'ขอโทษ'],
+    ['没关系', 'เหมย กวน ซี', 'ไม่เป็นไร'],
+    ['可以', 'เขอ อี่', 'ได้'],
+    ['不可以', 'ปู้ เขอ อี่', 'ไม่ได้'],
+    ['好的', 'ห่าว เตอะ', 'โอเค'],
+    ['等一下', 'เติ่ง อี๋ เซี่ย', 'รอแป๊บนึง'],
+    ['我不知道', 'หว่อ ปู้ จือ เต้า', 'ฉันไม่รู้'],
+    ['听不懂', 'ทิง ปู้ ต่ง', 'ฟังไม่เข้าใจ'],
+    ['我不会说中文', 'หว่อ ปู๋ ฮุ่ย ซัว จง เหวิน', 'ฉันพูดจีนไม่ได้'],
+  ] },
+  { id: 'food', title: 'ร้านอาหาร', items: [
+    ['两个人', 'เหลี่ยง เก้อ เหริน', 'สองคน'],
+    ['有菜单吗？', 'โหย่ว ไช่ ตาน มา', 'มีเมนูไหม'],
+    ['我要这个', 'หว่อ เย่า เจ้อ เก้อ', 'เอาอันนี้'],
+    ['这个是什么？', 'เจ้อ เก้อ ซื่อ เสิน เมอ', 'อันนี้คืออะไร'],
+    ['有什么推荐？', 'โหย่ว เสิน เมอ ทุย เจี้ยน', 'มีอะไรแนะนำไหม'],
+    ['不要辣', 'ปู๋ เย่า ล่า', 'ไม่เอาเผ็ด'],
+    ['少辣', 'เส่า ล่า', 'เผ็ดน้อย'],
+    ['不要香菜', 'ปู๋ เย่า เซียง ไช่', 'ไม่ใส่ผักชี'],
+    ['一杯水', 'อี้ เปย สุ่ย', 'น้ำหนึ่งแก้ว'],
+    ['太好吃了！', 'ไท่ ห่าว ชือ เลอ', 'อร่อยมาก!'],
+    ['买单', 'หม่าย ตาน', 'คิดเงินด้วย'],
+    ['可以打包吗？', 'เขอ อี่ ต่า เปา มา', 'ห่อกลับได้ไหม'],
+    ['可以退吗？', 'เขอ อี่ ทุ่ย มา', 'คืนได้ไหม'],
+  ] },
+  { id: 'shop', title: 'ซื้อของ', items: [
+    ['多少钱？', 'ตัว เส่า เฉียน', 'ราคาเท่าไหร่'],
+    ['太贵了', 'ไท่ กุ้ย เลอ', 'แพงเกินไป'],
+    ['便宜一点', 'เผียน อี๋ อี้ เตี่ยน', 'ถูกกว่านี้หน่อย'],
+    ['可以试试吗？', 'เขอ อี่ ซื่อ ซื่อ มา', 'ขอลองได้ไหม'],
+    ['有别的颜色吗？', 'โหย่ว เปี๋ย เตอะ เหยียน เซ่อ มา', 'มีสีอื่นไหม'],
+    ['有大一点的吗？', 'โหย่ว ต้า อี้ เตี่ยน เตอะ มา', 'มีใหญ่กว่านี้ไหม'],
+    ['有小一点的吗？', 'โหย่ว เสี่ยว อี้ เตี่ยน เตอะ มา', 'มีเล็กกว่านี้ไหม'],
+    ['我看看', 'หว่อ คั่น คั่น', 'ขอดูก่อน'],
+    ['不用了', 'ปู๋ ย่ง เลอ', 'ไม่เอาแล้ว / ไม่ต้องแล้ว'],
+    ['可以扫码吗？', 'เขอ อี่ เส่า หม่า มา', 'สแกนจ่ายได้ไหม'],
+  ] },
+  { id: 'go', title: 'เดินทาง', items: [
+    ['我要去这里', 'หว่อ เย่า ชวี่ เจ้อ หลี่', 'ฉันจะไปที่นี่'],
+    ['这里停车', 'เจ้อ หลี่ ถิง เชอ', 'จอดตรงนี้'],
+    ['在哪里？', 'ไจ้ หน่า หลี่', 'อยู่ที่ไหน'],
+    ['怎么走？', 'เจิ่น เมอ โจ่ว', 'ไปยังไง'],
+    ['远吗？', 'หย่วน มา', 'ไกลไหม'],
+    ['近吗？', 'จิ้น มา', 'ใกล้ไหม'],
+    ['左转', 'จั่ว จ่วน', 'เลี้ยวซ้าย'],
+    ['右转', 'โย่ว จ่วน', 'เลี้ยวขวา'],
+    ['直走', 'จื๋อ โจ่ว', 'ตรงไป'],
+    ['到了吗？', 'เต้า เลอ มา', 'ถึงหรือยัง'],
+    ['我要下车', 'หว่อ เย่า เซี่ย เชอ', 'ฉันจะลงรถ'],
+  ] },
+  { id: 'hotel', title: 'ที่พัก', items: [
+    ['我有预订', 'หว่อ โหย่ว อวี้ ติ้ง', 'ฉันจองไว้แล้ว'],
+    ['我要入住', 'หว่อ เย่า รู่ จู้', 'ฉันจะเช็กอิน'],
+    ['我要退房', 'หว่อ เย่า ทุ่ย ฝาง', 'ฉันจะเช็กเอาต์'],
+    ['WiFi密码是多少？', 'วายฟาย มี่ หม่า ซื่อ ตัว เส่า', 'รหัส Wi-Fi คืออะไร'],
+    ['没有热水', 'เหมย โหย่ว เร่อ สุ่ย', 'ไม่มีน้ำร้อน'],
+    ['空调坏了', 'คง เถียว ไฮว่ เลอ', 'แอร์เสีย'],
+    ['可以换房间吗？', 'เขอ อี่ ฮ่วน ฝาง เจียน มา', 'เปลี่ยนห้องได้ไหม'],
+    ['可以寄存行李吗？', 'เขอ อี่ จี้ ฉุน สิง หลี่ มา', 'ฝากกระเป๋าได้ไหม'],
+  ] },
+  { id: 'trip', title: 'เที่ยว / ถ่ายรูป', items: [
+    ['可以拍照吗？', 'เขอ อี่ พาย เจ้า มา', 'ถ่ายรูปได้ไหม'],
+    ['帮我拍照好吗？', 'ปัง หว่อ พาย เจ้า ห่าว มา', 'ช่วยถ่ายรูปให้หน่อยได้ไหม'],
+    ['这里很漂亮', 'เจ้อ หลี่ เหิ่น เพี่ยว เลี่ยง', 'ที่นี่สวยมาก'],
+    ['门票多少钱？', 'เหมิน เพี่ยว ตัว เส่า เฉียน', 'ตั๋วราคาเท่าไหร่'],
+    ['洗手间在哪里？', 'สี่ โส่ว เจียน ไจ้ หน่า หลี่', 'ห้องน้ำอยู่ไหน'],
+    ['这里可以进去吗？', 'เจ้อ หลี่ เขอ อี่ จิ้น ชวี่ มา', 'เข้าไปตรงนี้ได้ไหม'],
+  ] },
+  { id: 'help', title: 'ขอความช่วยเหลือ', items: [
+    ['帮帮我', 'ปัง ปัง หว่อ', 'ช่วยฉันหน่อย'],
+    ['我迷路了', 'หว่อ หมี ลู่ เลอ', 'ฉันหลงทาง'],
+    ['我找不到', 'หว่อ เจ่า ปู๋ เต้า', 'ฉันหาไม่เจอ'],
+    ['请说慢一点', 'ฉิ่ง ซัว ม่าน อี้ เตี่ยน', 'พูดช้าหน่อย'],
+    ['请再说一遍', 'ฉิ่ง ไจ้ ซัว อี๋ เปี้ยน', 'พูดอีกครั้งได้ไหม'],
+    ['我是泰国人', 'หว่อ ซื่อ ไท่ กั๋ว เหริน', 'ฉันเป็นคนไทย'],
+    ['我用翻译软件', 'หว่อ ย่ง ฟาน อี้ หร่วน เจี้ยน', 'ฉันใช้แอปแปลภาษา'],
+  ] },
+  /* sentence patterns: [pattern, reading, meaning, example, example meaning] */
+  { id: 'pattern', title: 'รูปแบบประโยค', items: [
+    ['我要…', 'หว่อ เย่า', 'ฉันต้องการ…', '我要这个', 'เอาอันนี้'],
+    ['可以…吗？', 'เขอ อี่…มา', '…ได้ไหม?', '可以拍照吗？', 'ถ่ายรูปได้ไหม'],
+    ['有没有…', 'โหย่ว เหมย โหย่ว', 'มี…ไหม?', '有没有水？', 'มีน้ำไหม'],
+    ['不要…', 'ปู๋ เย่า', 'ไม่เอา…', '不要辣', 'ไม่เอาเผ็ด'],
+    ['这个…', 'เจ้อ เก้อ', 'อันนี้', '这个多少钱？', 'อันนี้ราคาเท่าไหร่'],
+  ] },
+];
+
+function viewPhrases(sec) {
+  const s = PHRASES.find((x) => x.id === sec) || PHRASES[0];
+  return `<main class="screen">
+    <header class="bar">
+      <a class="icon-btn" href="#/" aria-label="กลับหน้าแรก">${ic.back}</a>
+      <div class="grow stack-s"><span class="eyebrow">แตะประโยคเพื่อขยายให้อีกฝ่ายดู</span><h1 class="title-l">ประโยคภาษาจีน</h1></div>
+    </header>
+    <div class="filters phrase-cats" role="group" aria-label="เลือกหมวด">
+      ${PHRASES.map((x) => `<a class="filter row" href="#/phrases/${x.id}" aria-pressed="${x.id === s.id}">${x.title}</a>`).join('')}
+    </div>
+    <section class="card phrase-list">
+      ${s.items.map(([zh, th, mean, exZh, exMean], i) => `<a class="phrase" href="#/phrases/${s.id}/${i}">
+        <span class="zh" lang="zh-CN">${h(zh)}</span>
+        <span class="read">${h(th)}</span>
+        <span class="small muted">${h(mean)}</span>
+        ${exZh ? `<span class="small ex"><span lang="zh-CN">${h(exZh)}</span> = ${h(exMean)}</span>` : ''}
+      </a>`).join('')}
+    </section>
+    <p class="tiny muted">คำอ่านไทยเป็นการถอดเสียงโดยประมาณ ภาษาจีนมีวรรณยุกต์ ถ้าพูดแล้วอีกฝ่ายไม่เข้าใจ ให้แตะประโยคแล้วโชว์ตัวจีนให้ดูได้เลย</p>
+  </main>`;
+}
+
+/* one phrase, big, to hold up to the other person */
+function viewPhrase(sec, i) {
+  const s = PHRASES.find((x) => x.id === sec);
+  const p = s && s.items[i];
+  if (!p) return viewPhrases(sec);
+  const [zh, th, mean, exZh, exMean] = p;
+  const n = s.items.length;
+  return `<main class="taxi"><div class="screen">
+    <header class="bar"><span class="grow eyebrow">${h(s.title)} · ${i + 1}/${n}</span><a class="icon-btn" href="#/phrases/${s.id}" aria-label="ปิด">${ic.x}</a></header>
+    <p class="zh phrase-big" lang="zh-CN">${h(exZh || zh)}</p>
+    <div class="stack-s">
+      <span class="bold" style="font-size:20px">${h(exZh ? `${zh} · ${th}` : th)}</span>
+      <span class="muted">${h(exZh ? `${exMean} (${mean})` : mean)}</span>
+    </div>
+    <div class="grid-2">
+      <a class="btn" href="#/phrases/${s.id}/${(i - 1 + n) % n}">${ic.back} ก่อนหน้า</a>
+      <a class="btn" href="#/phrases/${s.id}/${(i + 1) % n}">ถัดไป ${ic.next}</a>
+    </div>
+  </div></main>`;
+}
+
 /* ---------- forms (bottom sheet) ---------- */
 
 const COLORS = [['#C8372D', 'แดง'], ['#1F5FAD', 'น้ำเงิน'], ['#1E7A5A', 'เขียว'], ['#7A3E9D', 'ม่วง'], ['#14202B', 'กรมท่า']];
@@ -1304,7 +1444,8 @@ function render() {
   if (needsPassword()) { viewLock(); return; }
   const t = parts[0] === 't' ? trip(parts[1]) : null;
   let html;
-  if (!t) { html = viewHome(); document.documentElement.style.setProperty('--accent', '#C8372D'); }
+  if (parts[0] === 'phrases') { html = parts[2] ? viewPhrase(parts[1], Number(parts[2])) : viewPhrases(parts[1]); document.documentElement.style.setProperty('--accent', '#C8372D'); }
+  else if (!t) { html = viewHome(); document.documentElement.style.setProperty('--accent', '#C8372D'); }
   else {
     document.documentElement.style.setProperty('--accent', t.color || '#C8372D');
     const view = parts[2] || '';
@@ -1324,6 +1465,7 @@ function render() {
     const samePage = lastHash && lastHash.split('/').slice(0, 3).join('/') === hash.split('/').slice(0, 3).join('/') && /\/(d|docs|pack)\//.test(hash);
     if (!samePage) window.scrollTo(0, 0);
     $app.querySelector('.pill-day[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+    $app.querySelector('.phrase-cats [aria-pressed="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
     lastHash = hash;
   }
 }
